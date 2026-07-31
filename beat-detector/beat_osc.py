@@ -57,8 +57,16 @@ from pythonosc.udp_client import SimpleUDPClient
 
 RATE = 44100
 CHUNK = 1024
-CHANNELS = 1
-FORMAT = pyaudio.paFloat32
+# The USB mic only exposes native 16-bit stereo capture (confirmed via
+# `arecord -D hw:X,0 -f S16_LE -c 2 ...`, which runs cleanly, vs. a
+# float32/mono open here which forces PortAudio to do the format+channel
+# conversion in software -- suspected cause of a hang where the capture
+# stream's internal poll() never returns again after some chunks, no
+# error, no crash, confirmed independent of ALSA/hardware since raw
+# `arecord` in the native format never hung). Open in the native format
+# and downmix to mono float ourselves instead of asking PortAudio to.
+CHANNELS = 2
+FORMAT = pyaudio.paInt16
 
 # Restrict spectral flux to a low-frequency band, since kicks/bass carry
 # most of the rhythmic information in typical dance/pop music.
@@ -389,7 +397,8 @@ def main():
     try:
         while True:
             raw = stream.read(CHUNK, exception_on_overflow=False)
-            samples = np.frombuffer(raw, dtype=np.float32)
+            stereo = np.frombuffer(raw, dtype=np.int16).reshape(-1, CHANNELS)
+            samples = stereo.mean(axis=1).astype(np.float32) / 32768.0
 
             spectrum = np.fft.rfft(samples)
             mag = np.abs(spectrum)

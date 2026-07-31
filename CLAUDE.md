@@ -664,6 +664,60 @@ pulling this change to the Pi, `sudo systemctl restart beat-osc.service` and re-
 `beat` / `[intensity]` / `[state]` lines as sound hits the mic — **not yet re-verified live on the
 Pi**, next thing to confirm once this fix is deployed there.
 
+### Beat detection silently hanging mid-session on the Pi (found and fixed 2026-07-31)
+
+**Symptom:** `beat_osc.py` would work correctly for anywhere from ~1 to ~36 seconds after
+starting — real `beat` lines with sensible `flux`/`threshold` values, reacting to actual claps —
+then go completely silent: no more `beat` lines even while clapping directly at the mic, no
+crash, no traceback, `beat-osc.service` still reported `active (running)`. `[state]`/`[auto]`
+lines (driven by the separate daemon WebSocket thread, see "Auto-layer" above) kept arriving fine,
+which is what made this initially look WebSocket-related rather than audio-related — the two
+threads are independent, and only the audio-processing one had actually died.
+
+**Diagnosis path (each step ruled something out):**
+- `top -p <pid>` on a hung process: `0.0 %CPU`, state `S` (sleeping), `TIME+` not increasing —
+  genuinely blocked, not slow/busy.
+- `sudo cat /proc/<pid>/task/*/syscall`: one thread in `epoll_pwait` (the WebSocket thread's
+  normal idle wait — fine), the other in `ppoll` waiting on exactly **one** fd — consistent with
+  PortAudio's ALSA backend blocking inside its own internal `poll()` while waiting for the next
+  capture buffer, i.e. the audio thread was the one stuck, not the network thread.
+- `dmesg -T | grep -iE "usb|audio"` around the hang timestamps: nothing — no disconnect, no reset,
+  no error. Physically unplugging/replugging the USB mic didn't fix it either. Ruled out a
+  flaky/failing microphone.
+- Stopped `pipewire`/`wireplumber` (present on this Pi image, `fuser /dev/snd/*` showed both
+  holding `/dev/snd/controlC2` and `/dev/snd/seq`) in case its session/idle-suspend management was
+  interfering with the directly-opened `hw:` device underneath. No change. Ruled out.
+- Decisive test: stopped `beat-osc.service` (frees the exclusive-access device — this card has no
+  `dmix`, confirmed by the recurring `unable to open slave` ALSA spam, so only one opener at a
+  time) and ran plain `arecord -D hw:2,0 -f S16_LE -r 44100 -c 2 -d 15 /tmp/test.wav` directly —
+  completed cleanly every time, correct file size (`2646044` bytes for 15s/44100Hz/stereo/16-bit).
+  **Raw ALSA capture in the device's native format never hung, at any duration tested.** This
+  isolated the bug to the PyAudio/Python layer specifically, not ALSA, the kernel driver, or the
+  hardware.
+
+**Root cause:** `beat_osc.py` was opening the stream as `CHANNELS=1` (mono), `FORMAT=paFloat32`,
+but `arecord -l`/the successful raw test showed the device's actual native capture format is
+**16-bit stereo** — confirmed by `--list-devices`' own probe (`(in: 2, ...)`) and by `arecord`
+only working reliably with `-c 2`. Since this card has no software mixing/conversion plugin (no
+`dmix`, `hw:` opened directly, not `plughw:`), PortAudio itself has to do the mono-downmix and
+float conversion in software when the app requests a format that doesn't match the hardware's
+native one — and that software conversion path is the one that would eventually leave its
+internal `poll()` never signaling ready again, with no error surfaced anywhere. The exact trigger
+condition (why it happened after anywhere from ~1 to ~36 seconds, not deterministically) was never
+pinned down beyond "some conversion/buffering edge case" — not needed to, since the fix removes
+the software conversion path entirely rather than working around a specific trigger.
+
+**Fix:** open the stream in the hardware's actual native format (`CHANNELS=2`,
+`FORMAT=pyaudio.paInt16`) and do the stereo→mono downmix and int16→float normalization in Python
+with numpy instead (`beat_osc.py`, top of the capture loop): `stereo.mean(axis=1) / 32768.0`. All
+downstream logic (spectral-flux beat detection, `IntensityClassifier`) only ever compares relative
+values (self-adapting thresholds, dB relative to a rolling baseline — see `IntensityClassifier`'s
+own docstring) so the exact normalization scale doesn't matter, only that it's consistent frame to
+frame, which it is. **Not yet re-verified over a long unattended run** — confirmed the hang
+symptom and its exact repro conditions before applying this fix, next step is a real extended
+listening session (ideally the length of an actual event) to confirm it's actually gone and not
+just less frequent.
+
 ## Known gotchas: Chaser (`Type="Chaser"`) authoring
 
 Two independent issues have hit the "Farbwechsel" Chaser; both are now fixed in this file, but
