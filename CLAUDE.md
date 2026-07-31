@@ -640,6 +640,30 @@ own index from this list, **not** the ALSA card number from `arecord -l` (they'r
 numbering schemes — confirmed here: ALSA card 2, PyAudio index 0, since it's the only capture-
 capable device PyAudio sees). On this Pi, `MIC_DEVICE="0"` already matched correctly.
 
+### `journalctl -u beat-osc.service -f` showing nothing but ALSA/JACK noise, even while it's working
+
+**Found and fixed 2026-07-31**, same session as the `--list-devices` finding above. With
+`MIC_DEVICE` confirmed correct, following the live log with `journalctl -u beat-osc.service -f`
+still showed only the startup ALSA/JACK probe-noise block and nothing after — not even the
+script's own `"Listening (device=..., sending OSC ...)"` line it unconditionally prints right at
+startup (`beat_osc.py`, just before the capture loop), let alone `beat  flux=...` lines while
+making noise at the mic. Looked identical to "detector isn't hearing anything."
+
+Root cause: **stdout buffering, not detection failure.** Python fully block-buffers `stdout` when
+it isn't attached to a TTY (true for a systemd service, which captures stdout via a pipe) — `print()`
+calls queue up in that buffer and only reach `journalctl` once the buffer fills or the process
+exits, regardless of how quickly the events they describe are actually happening. The ALSA/JACK
+lines appear immediately because they're `stderr` (unbuffered), which made it look like the script
+started and then went silent, when actually its own stdout output (startup line, every beat, every
+intensity-band change) was queued up invisibly the whole time.
+
+**Fix:** run the interpreter with `-u` (unbuffered stdout/stderr) in `run-beat-osc.sh`'s `exec`
+line — `python3 -u beat_osc.py --auto ...` instead of `python3 beat_osc.py --auto ...`. After
+pulling this change to the Pi, `sudo systemctl restart beat-osc.service` and re-running
+`journalctl -u beat-osc.service -f` should show the `"Listening ..."` line immediately, then live
+`beat` / `[intensity]` / `[state]` lines as sound hits the mic — **not yet re-verified live on the
+Pi**, next thing to confirm once this fix is deployed there.
+
 ## Known gotchas: Chaser (`Type="Chaser"`) authoring
 
 Two independent issues have hit the "Farbwechsel" Chaser; both are now fixed in this file, but

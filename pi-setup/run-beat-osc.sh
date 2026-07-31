@@ -28,7 +28,7 @@ fi
 # deliberately unquoted below so it word-splits into 3 separate args, since
 # beat_osc.py's --intensity-thresholds-db takes 3 (nargs=3).
 # shellcheck disable=SC2086
-exec "$REPO_DIR/beat-detector/venv/bin/python3" beat_osc.py --auto \
+exec "$REPO_DIR/beat-detector/venv/bin/python3" -u beat_osc.py --auto \
     --device "${MIC_DEVICE:?MIC_DEVICE not set in $CONFIG}" \
     --web-port "${WEB_PORT:-9999}" \
     --sensitivity "${SENSITIVITY:-3.5}" \
