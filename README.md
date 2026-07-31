@@ -3,7 +3,8 @@
 Setup für eine Mehr-Spot-RGBW/RGBWW-Lichtanlage mit QLC+ (Q Light Controller+), inklusive
 Sound-to-Light mit automatischer Takterkennung übers Mikrofon (kein manuelles Tempo-Tippen) und
 optionaler Intensitäts-gesteuerter Ebenen-Automatik. Zielsystem ist ein unbeaufsichtigter
-Raspberry Pi, bedient übers Tablet (QLC+ Web Access) — siehe Pi-Guide weiter unten.
+Raspberry Pi, bedient übers Tablet (QLC+ Web Access) über einen vom Pi selbst aufgespannten
+WLAN-Hotspot (kein WLAN/Router am Aufführungsort nötig) — siehe Pi-Guide weiter unten.
 
 Für tiefere technische Details, Bugs, Testergebnisse und Design-Entscheidungen (inkl. warum
 bestimmte Ansätze verworfen wurden) siehe `CLAUDE.md` — dieses README ist die praktische
@@ -143,6 +144,7 @@ ein fertiges Image" reicht, ist das trotzdem eine legitime Abkürzung.
 |---|---|---|
 | QLC+ (Programm), `beat_osc.py`-Code + venv | Pi-Root (`/opt/lichtsteuerung`) | Überlebt Reboot durch Overlay-Schutz, ändert sich zur Laufzeit eh nicht |
 | `.qxw`-Projektdateien, `lichtsteuerung.conf` | USB-Stick (`/mnt/usbdata`) | Muss editierbar bleiben, ohne den Pi anzufassen |
+| WLAN-Hotspot-Profil (NetworkManager) | Pi-Root (`/etc/NetworkManager/...`), aber SSID/Passwort kommen bei jedem Boot aus `lichtsteuerung.conf` | Systemweite Netzwerkeinstellung, trotzdem übers Config-File änderbar wie alles andere |
 
 ### 1. Raspberry Pi OS vorbereiten
 
@@ -187,6 +189,7 @@ Zugangsdaten-Setup in einem Rutsch, damit ab dem ersten Boot alles per SSH geht:
 Erststart, dann per SSH:
 ```
 sudo apt update && sudo apt full-upgrade -y
+sudo apt install -y vim
 sudo reboot
 ```
 
@@ -215,14 +218,16 @@ sudo make install
 ```
 (`-j4` nutzt alle 4 Kerne des Pi 5 — Build dauert trotzdem eine Weile, einplanen.)
 
-Test: `qlcplus --version` sollte `4.14.4` zeigen.
+Test: `QT_QPA_PLATFORM=offscreen qlcplus --version` sollte `4.14.4` zeigen. `QT_QPA_PLATFORM=offscreen`
+nötig, da ohne Display/X-Server sonst `qt.qpa.xcb: could not connect to display` — bestätigt auf
+echter Pi-5-Hardware 2026-07-31 (siehe unten, "Bekannte offene Punkte").
 
 ### 3. Projekt-Code auf den Pi bringen
 
 ```
 sudo mkdir -p /opt/lichtsteuerung
-sudo chown pi:pi /opt/lichtsteuerung
-git clone <dieses-Repo-URL> /opt/lichtsteuerung
+sudo chown "$(whoami):$(whoami)" /opt/lichtsteuerung
+git clone https://github.com/Kulturlichtung/Lichtsteuerung.git /opt/lichtsteuerung
 cd /opt/lichtsteuerung/beat-detector
 python3 -m venv --system-site-packages venv
 sudo apt install -y python3-pyaudio python3-numpy
@@ -236,35 +241,53 @@ Mikrofon-Geräteindex ermitteln:
 ```
 ./venv/bin/python3 beat_osc.py --list-devices
 ```
+Davor jede Menge `ALSA lib ...`/`jack server is not running`-Zeilen sind normal (PortAudio testet
+beim Init alle in der ALSA-Konfig gelisteten virtuellen PCM-Devices durch, die meisten existieren
+auf einem USB-Mikro schlicht nicht; kein JACK installiert/nötig) — kein Fehler, ignorieren.
+Relevant ist nur die letzte Zeile, z. B. `[0] USB AUDIO DEVICE: ... (in: 2, ...)` → Index `0` ist
+der `MIC_DEVICE`-Wert für `lichtsteuerung.conf`.
 
 ### 4. USB-Stick vorbereiten und einbinden
 
 Stick als **exFAT** formatieren (Windows-lesbar, falls die `.qxw`-Datei auch mal von einem
-Windows-Rechner aus bearbeitet werden soll) — auf dem Pi:
+Windows-Rechner aus bearbeitet werden soll) — auf dem Pi. `DEV` einmal setzen (Gerätename vorher
+mit `lsblk` prüfen!), danach übernehmen alle folgenden Befehle den Wert automatisch:
+
+**Achtung:** Raspberry Pi OS hängt Sticks mit vorhandenem Dateisystem beim Einstecken automatisch
+ein (Desktop-Umgebung), z. B. unter `/media/<nutzername>/<label>` — `lsblk` zeigt das unter
+`MOUNTPOINTS`. Vor dem Formatieren prüfen, ob wichtige Daten drauf liegen
+(`ls /media/<nutzername>/<label>`) und aushängen, sonst blockiert `mkfs`:
 ```
 sudo apt install -y exfatprogs
-sudo mkfs.exfat -n LICHTSTICK /dev/sda1   # Gerätename vorher mit lsblk prüfen!
+DEV=/dev/sda1   # Gerätename vorher mit lsblk prüfen!
+sudo umount "$DEV"   # falls automatisch gemountet -- siehe Achtung oben
+sudo mkfs.exfat -n LICHTSTICK "$DEV"
 ```
+Ist der Stick schon leer/passend exFAT-formatiert, kann dieser Schritt auch übersprungen werden
+— dann direkt weiter mit dem Mount-Punkt unten (Stick vorher trotzdem aushängen, `mount -a`
+später hängt ihn sauber unter `/mnt/usbdata` wieder ein).
 
-Mount-Punkt anlegen, UUID ermitteln, dauerhaft einbinden:
+Mount-Punkt anlegen, UUID ermitteln und automatisch (samt aktuellem Nutzernamen) in `/etc/fstab`
+eintragen — kein manuelles Abtippen von UUID/Nutzername nötig:
 ```
 sudo mkdir -p /mnt/usbdata
-sudo blkid /dev/sda1   # UUID kopieren
-sudo nano /etc/fstab
+UUID=$(sudo blkid -s UUID -o value "$DEV")
+echo "UUID=$UUID  /mnt/usbdata  exfat  defaults,nofail,uid=$(whoami),gid=$(whoami),umask=000  0  2" | sudo tee -a /etc/fstab
 ```
-Zeile anhängen (UUID ersetzen):
-```
-UUID=XXXX-XXXX  /mnt/usbdata  exfat  defaults,nofail,uid=pi,gid=pi,umask=000  0  2
-```
-`nofail`: Boot hängt nicht, falls der Stick mal nicht steckt. `uid=pi,gid=pi`: exFAT hat keine
-echten Unix-Rechte, das synthetisiert sie auf den `pi`-Nutzer.
+`nofail`: Boot hängt nicht, falls der Stick mal nicht steckt. `uid=$(whoami),gid=$(whoami)`:
+exFAT hat keine echten Unix-Rechte, das synthetisiert sie auf den gewählten Nutzer.
 
-Einhängen und Projektdaten drauf kopieren:
+Einhängen und Projektdaten drauf kopieren. `daemon-reload` nötig, da systemd `/etc/fstab` beim
+Booten einliest und cacht — ohne den Reload sieht `mount -a` nur den alten Stand, egal wie
+frisch die Zeile eben angehängt wurde:
 ```
+sudo systemctl daemon-reload
 sudo mount -a
-cp /opt/lichtsteuerung/qlcplus4/2026-07_kulturlichtung_v6.qxw /mnt/usbdata/qlcplus4/2026-07_kulturlichtung_v6.qxw   # Pfad ggf. anlegen
+mkdir -p /mnt/usbdata/qlcplus4
+cp /opt/lichtsteuerung/qlcplus4/2026-07_kulturlichtung_v6.qxw /mnt/usbdata/qlcplus4/2026-07_kulturlichtung_v6.qxw
 cp /opt/lichtsteuerung/pi-setup/lichtsteuerung.conf.example /mnt/usbdata/lichtsteuerung.conf
-nano /mnt/usbdata/lichtsteuerung.conf   # QXW_FILE, AUTO_COLOR, MIC_DEVICE, WEB_PORT eintragen
+vim /mnt/usbdata/lichtsteuerung.conf   # QXW_FILE, AUTO_COLOR, MIC_DEVICE, WEB_PORT,
+                                        # HOTSPOT_SSID, HOTSPOT_PASSWORD eintragen
 ```
 
 `lichtsteuerung.conf` enthält außerdem alle Takterkennungs-/Intensitäts-Feintuning-Werte
@@ -272,7 +295,55 @@ nano /mnt/usbdata/lichtsteuerung.conf   # QXW_FILE, AUTO_COLOR, MIC_DEVICE, WEB_
 `INTENSITY_EMA_ALPHA`, `BAND_HOLD_MS` — je mit Kommentar, was sie tun) mit denselben
 Standardwerten wie `beat_osc.py --help`. Anpassbar ohne Pi-Login, direkt auf dem USB-Stick.
 
-### 5. Root-Dateisystem schreibschützen (overlayroot)
+### 5. WLAN-Hotspot einrichten
+
+Kein WLAN/Router am Aufführungsort — der Pi spannt sein eigenes WLAN auf, das Tablet verbindet
+sich direkt damit für QLC+ Web Access. Nutzt NetworkManager (Bookworm-Standard, kein
+Zusatzpaket nötig). SSID/Passwort kommen aus `lichtsteuerung.conf` auf dem USB-Stick (siehe
+Schritt 4) — änderbar wie jede andere Einstellung, ohne den Pi anzufassen.
+
+**Wichtig:** Hotspot- und WLAN-Client-Betrieb teilen sich dieselbe Antenne (`wlan0`) — beides
+gleichzeitig geht nicht. Für die Ersteinrichtung oben (SSH, `apt`, Build) deshalb
+**Netzwerkkabel** nutzen, nicht die optionalen WLAN-Zugangsdaten aus Schritt 1 — sonst
+blockiert später der Hotspot den Client-Modus oder umgekehrt.
+
+`pi-setup/run-hotspot.sh` legt beim ersten Lauf die NetworkManager-Verbindung
+`Lichtsteuerung-Hotspot` an (bzw. aktualisiert sie, falls sich SSID/Passwort geändert haben)
+und aktiviert sie. Als `hotspot.service` in Schritt 6 zusammen mit den anderen beiden Services
+eingerichtet — läuft ab dann bei jedem Boot automatisch, kein manueller Schritt mehr nötig.
+
+### 6. Autostart einrichten (systemd)
+
+**Vor** dem Schreibschutz (nächster Schritt), nicht danach — Unit-Dateien landen unter `/etc`,
+und alles, was nach dem Overlay-aktivierenden Reboot dort neu geschrieben wird, ist beim
+nächsten Neustart wieder weg (siehe Warnung unten). Erst hier rein, dann erst schützen.
+
+`<nutzername>`-Platzhalter in den beiden User-gebundenen Units per `sed` durch den eigenen
+(aktuell eingeloggten) Nutzernamen ersetzen, dabei direkt nach `/etc/systemd/system/` kopieren.
+`hotspot.service` braucht das nicht (läuft als root, für die Netzwerk-Änderungen nötig):
+```
+sudo sed "s/<nutzername>/$(whoami)/g" /opt/lichtsteuerung/pi-setup/qlcplus.service | sudo tee /etc/systemd/system/qlcplus.service >/dev/null
+sudo sed "s/<nutzername>/$(whoami)/g" /opt/lichtsteuerung/pi-setup/beat-osc.service | sudo tee /etc/systemd/system/beat-osc.service >/dev/null
+sudo cp /opt/lichtsteuerung/pi-setup/hotspot.service /etc/systemd/system/hotspot.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now hotspot.service
+sudo systemctl enable --now qlcplus.service
+sudo systemctl enable --now beat-osc.service
+```
+
+Status/Logs prüfen:
+```
+systemctl status hotspot.service qlcplus.service beat-osc.service
+journalctl -u hotspot.service -u qlcplus.service -u beat-osc.service -f
+```
+
+**Reihenfolge/Robustheit:** `beat-osc.service` startet nach `qlcplus.service`, braucht es aber
+nicht zwingend fertig verbunden zu haben — `beat_osc.py`s WebSocket-Client versucht jede
+Sekunde neu zu verbinden, bis QLC+s Web Access wirklich bereit ist (siehe `CLAUDE.md`).
+`hotspot.service` läuft vor `qlcplus.service` (`Before=` in der Unit), damit das WLAN beim
+Verbinden vom Tablet aus schon steht.
+
+### 7. Root-Dateisystem schreibschützen (overlayroot)
 
 **Nicht** die `raspi-config`-eigene "Overlay File System"-Option nutzen — die macht auf
 Bookworm pauschal *alle* eingehängten Dateisysteme read-only, würde also auch den USB-Stick
@@ -281,7 +352,7 @@ das gezielt nur `/` schützt:
 
 ```
 sudo apt install -y overlayroot
-sudo nano /etc/overlayroot.conf
+sudo vim /etc/overlayroot.conf
 ```
 Zeile `overlayroot=""` suchen und ersetzen durch:
 ```
@@ -290,40 +361,24 @@ overlayroot="tmpfs:recurse=0"
 `recurse=0` ist der entscheidende Teil — ohne den würde auch hier wieder der USB-Stick mit
 schreibgeschützt.
 
-**Vor dem Reboot:** alles unter Schritt 2–4 muss fertig sein (Overlay bedeutet: jede Änderung
-an `/` nach dem nächsten Neustart ist wieder weg, bis explizit deaktiviert). Zum Deaktivieren
-(z. B. für ein späteres Update): `sudo overlayroot-chroot`, Änderungen machen, dann normal
-rebooten.
+**Vor dem Reboot:** alles unter Schritt 2–6 muss fertig sein — insbesondere die systemd-Units
+aus Schritt 6 (Overlay bedeutet: jede Änderung an `/` nach dem nächsten Neustart ist wieder weg,
+bis explizit deaktiviert). Zum Deaktivieren (z. B. für ein späteres Update):
+`sudo overlayroot-chroot`, Änderungen machen, dann normal rebooten.
 
 ```
 sudo reboot
 ```
 
-### 6. Autostart einrichten (systemd)
-
-```
-sudo cp /opt/lichtsteuerung/pi-setup/qlcplus.service /etc/systemd/system/
-sudo cp /opt/lichtsteuerung/pi-setup/beat-osc.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now qlcplus.service
-sudo systemctl enable --now beat-osc.service
-```
-
-Status/Logs prüfen:
-```
-systemctl status qlcplus.service beat-osc.service
-journalctl -u qlcplus.service -u beat-osc.service -f
-```
-
-**Reihenfolge/Robustheit:** `beat-osc.service` startet nach `qlcplus.service`, braucht es aber
-nicht zwingend fertig verbunden zu haben — `beat_osc.py`s WebSocket-Client versucht jede
-Sekunde neu zu verbinden, bis QLC+s Web Access wirklich bereit ist (siehe `CLAUDE.md`).
-
-### 7. Test
+### 8. Test
 
 Pi neu starten (echter Kaltstart, nicht nur Service-Neustart) und beobachten:
-- `systemctl status qlcplus.service beat-osc.service` → beide `active (running)`.
-- Tablet/Laptop im selben Netz, Browser auf `http://<Pi-IP>:9999` → Virtual Console sichtbar.
+- `systemctl status hotspot.service qlcplus.service beat-osc.service` → alle drei `active (running)`.
+- WLAN-Liste auf Tablet/Laptop zeigt die konfigurierte `HOTSPOT_SSID`, verbinden mit
+  `HOTSPOT_PASSWORD` klappt.
+- Nach Verbinden mit dem Hotspot: Browser auf `http://<Pi-IP>:9999` → Virtual Console sichtbar
+  (Pi-IP z. B. `192.168.4.1`, NetworkManager-Standard-Gateway im Shared-Modus — genauer Wert
+  noch nicht auf echter Hardware bestätigt, siehe unten).
 - Konsole/Log von `beat-osc.service` zeigt `[ws] connected to ...` und (falls `AUTO_COLOR`
   gesetzt) `[state] Auto <farbe>: ON` kurz nach dem Start.
 - Musik/Rhythmus vorspielen → Lautstärke ändern → passender Ebenen-Button sollte sich in der
@@ -334,7 +389,8 @@ Pi neu starten (echter Kaltstart, nicht nur Service-Neustart) und beobachten:
 Kein Pi-Login nötig für alltägliche Änderungen: USB-Stick an einem anderen Rechner
 `lichtsteuerung.conf` bearbeiten (andere `.qxw`-Datei, andere `AUTO_COLOR`) oder die
 `.qxw`-Datei selbst ersetzen, zurück in den Pi stecken, Pi neu starten (oder
-`sudo systemctl restart qlcplus.service beat-osc.service`, falls er schon läuft).
+`sudo systemctl restart hotspot.service qlcplus.service beat-osc.service`, falls er schon
+läuft — z. B. nach Ändern von `HOTSPOT_SSID`/`HOTSPOT_PASSWORD`).
 
 ### Bekannte offene Punkte
 
@@ -342,10 +398,19 @@ Kein Pi-Login nötig für alltägliche Änderungen: USB-Stick an einem anderen R
   2026-07-30) — Befehle/Paketnamen gegen offizielle QLC+-Wiki-Doku und aktuelle Web-Recherche
   geprüft, aber nicht selbst durchgespielt. Beim ersten echten Durchlauf Schritt für Schritt
   bestätigen, nicht blind vertrauen (gleiche Regel wie überall sonst in diesem Projekt).
-- `QT_QPA_PLATFORM=offscreen` für den Headless-Betrieb (kein Display) ist Standard-Qt-Praxis,
-  aber nicht gegen dieses spezifische QLC+-Build getestet — falls QLC+ trotzdem einen Display-
-  Server verlangt, ersatzweise `xvfb-run` oder ein minimaler Autologin-X11-Session als
-  Workaround (dann aber echter Hack, nicht die saubere Lösung — erst berichten, dann
-  entscheiden).
+- `QT_QPA_PLATFORM=offscreen` für den Headless-Betrieb (kein Display) **bestätigt auf echter
+  Pi-5-Hardware 2026-07-31**: `qlcplus --version` schlug ohne die Variable mit
+  `qt.qpa.xcb: could not connect to display` fehl, mit `QT_QPA_PLATFORM=offscreen` lief's
+  fehlerfrei (`Q Light Controller Plus version 4.14.4`). `run-qlcplus.sh` setzt das bereits für
+  den echten Service — Schritt 2 selbst (`qlcplus --version` als reiner Build-Test) hatte es
+  vorher nicht in der Anleitung, jetzt nachgetragen (siehe oben). Kein Fallback (`xvfb-run` o.ä.)
+  mehr nötig.
 - Auto-Layer-Feature selbst ist laut `CLAUDE.md` noch nicht über einen ganzen Abend/mit echter
   Musik durchgetestet.
+- **WLAN-Hotspot (`hotspot.service`/`run-hotspot.sh`) ist neu und noch nicht auf echter
+  Pi-Hardware getestet** — `nmcli`-Befehle gegen NetworkManager-Doku geprüft, aber nicht selbst
+  durchgespielt (gleiche "erst live bestätigen"-Regel wie überall sonst in diesem Projekt). Beim
+  ersten echten Durchlauf insbesondere prüfen: ob Pi 5 + eingebautes WLAN-Modul den `ap`-Modus
+  tatsächlich unterstützt, ob `ipv4.method shared` die erwartete Pi-IP (üblich `192.168.4.1`)
+  vergibt, und ob `Before=qlcplus.service` reicht oder das Tablet manchmal vor fertigem
+  Hotspot-Start verbinden will.

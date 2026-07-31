@@ -20,6 +20,15 @@ MIC_DEVICE="1"
 # QLC+ Web Access port (must match between both services).
 WEB_PORT="9999"
 
+# --- WLAN hotspot (Pi opens its own WLAN, no router/WLAN at the venue
+# needed -- tablet connects directly to this) ---
+
+# Name of the WLAN the Pi itself opens up.
+HOTSPOT_SSID="Kulturlichtung"
+
+# Password for that WLAN (WPA2, min. 8 chars).
+HOTSPOT_PASSWORD="AENDERN-MICH"
+
 # --- Beat detection tuning (see beat_osc.py --help for full explanation) ---
 
 # Beat threshold = mean + SENSITIVITY * stddev of recent flux history.
