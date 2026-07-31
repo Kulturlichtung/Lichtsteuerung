@@ -363,12 +363,37 @@ schreibgeschützt.
 
 **Vor dem Reboot:** alles unter Schritt 2–6 muss fertig sein — insbesondere die systemd-Units
 aus Schritt 6 (Overlay bedeutet: jede Änderung an `/` nach dem nächsten Neustart ist wieder weg,
-bis explizit deaktiviert). Zum Deaktivieren (z. B. für ein späteres Update):
-`sudo overlayroot-chroot`, Änderungen machen, dann normal rebooten.
+bis explizit deaktiviert).
 
 ```
 sudo reboot
 ```
+
+**Schutz später wieder aufheben (Updates, Änderungen):** zwei Wege, je nach Umfang.
+
+*Kurze/einzelne Änderung (z. B. `apt upgrade`), Overlay bleibt sonst aktiv:*
+```
+sudo overlayroot-chroot
+```
+Öffnet Chroot ins echte (nicht überlagerte) Root-Dateisystem. Änderungen dort (z. B. `apt
+update && apt upgrade`) landen direkt auf der Platte, dauerhaft — kein Reboot, kein Deaktivieren
+nötig. `exit` verlässt den Chroot, Pi läuft danach normal mit Overlay weiter aktiv.
+
+*Länger/mehrere Änderungen, Overlay komplett zeitweise abschalten:*
+```
+sudo vim /etc/overlayroot.conf
+```
+`overlayroot="tmpfs:recurse=0"` zurück auf `overlayroot=""` setzen, dann:
+```
+sudo reboot
+```
+Nach dem Neustart ist `/` wieder normal beschreibbar (kein Overlay), Änderungen direkt
+persistent. Danach zum erneuten Schützen wieder `overlayroot="tmpfs:recurse=0"` eintragen und
+rebooten (Schritt oben wiederholen).
+
+*Nur für den nächsten einen Boot deaktivieren, ohne Config anzufassen:* Kernel-Cmdline-Parameter
+`overlayroot=disabled` anhängen (z. B. via `raspi-config` → Advanced → Bootloader/Cmdline, oder
+direkt in `/boot/firmware/cmdline.txt`), einmal rebooten, Parameter danach wieder entfernen.
 
 ### 8. Test
 
