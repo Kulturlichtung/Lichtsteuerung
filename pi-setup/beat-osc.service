@@ -1,0 +1,17 @@
+[Unit]
+Description=Lichtsteuerung Beat-Detector / Auto-Layer
+After=mnt-usbdata.mount qlcplus.service sound.target
+Requires=mnt-usbdata.mount
+Wants=qlcplus.service
+StartLimitIntervalSec=0
+
+[Service]
+ExecStart=/opt/lichtsteuerung/pi-setup/run-beat-osc.sh
+Restart=on-failure
+RestartSec=3
+User=pi
+Group=pi
+SupplementaryGroups=audio
+
+[Install]
+WantedBy=multi-user.target

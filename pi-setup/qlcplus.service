@@ -1,0 +1,16 @@
+[Unit]
+Description=QLC+ Lichtsteuerung (headless, Web Access)
+After=mnt-usbdata.mount sound.target
+Requires=mnt-usbdata.mount
+StartLimitIntervalSec=0
+
+[Service]
+ExecStart=/opt/lichtsteuerung/pi-setup/run-qlcplus.sh
+Restart=on-failure
+RestartSec=3
+User=pi
+Group=pi
+SupplementaryGroups=audio dialout
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,51 @@
+# Lichtsteuerung Pi config -- copy this file to the USB stick's root as
+# "lichtsteuerung.conf" and edit the values below. Read by
+# run-qlcplus.sh / run-beat-osc.sh at every boot -- no rebuild, no
+# systemd changes needed to switch project file or startup color.
+
+# .qxw file to open, path relative to the USB stick's mount point
+# (USB_MOUNT, see /etc/systemd/system/usb-data.mount).
+QXW_FILE="qlcplus4/2026-07_kulturlichtung_v6.qxw"
+
+# Color to auto-activate at boot (presses that color's "Auto" button
+# once, same as a tablet tap) -- leave empty for no auto-selection.
+# Valid values: blau-rosa, rot-weiss, gruen-gelb, blau-gelb, bunt
+AUTO_COLOR="blau-rosa"
+
+# Microphone device index for beat_osc.py (find via
+# `python3 beat_osc.py --list-devices` on the Pi -- USB device index,
+# will differ from any Windows test run).
+MIC_DEVICE="1"
+
+# QLC+ Web Access port (must match between both services).
+WEB_PORT="9999"
+
+# --- Beat detection tuning (see beat_osc.py --help for full explanation) ---
+
+# Beat threshold = mean + SENSITIVITY * stddev of recent flux history.
+# Lower = more sensitive (more, and more false-positive, triggers).
+SENSITIVITY="3.5"
+
+# Minimum time between two detected beats, in ms (caps detection at
+# 300 BPM by default, prevents double-triggering on one hit).
+REFRACTORY_MS="200"
+
+# --- Intensity/Auto-Layer tuning ---
+
+# 3 ascending dB boundaries between fast (current) and slow (baseline)
+# loudness level, marking the Fade/Direkt/Alternierend/AltAus
+# boundaries. Three space-separated numbers, ascending.
+INTENSITY_THRESHOLDS_DB="1.5 4.0 8.0"
+
+# Time constant (seconds) of the slow baseline loudness average -- must
+# stay well above a typical loud section's length, or that section
+# drags the baseline up to match itself and never reads as "loud".
+BASELINE_SECONDS="120"
+
+# Smoothing factor for the fast (current) loudness level, 0-1, higher
+# = more reactive to sudden changes.
+INTENSITY_EMA_ALPHA="0.15"
+
+# Minimum time (ms) a new intensity band must persist before a layer
+# switch is actually sent, to avoid flapping at a boundary.
+BAND_HOLD_MS="2000"
