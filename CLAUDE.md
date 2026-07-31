@@ -603,6 +603,43 @@ OSC wiring in this file is the original, already-working `/beat` → Cue List "N
 unrelated to this feature. `osc_sniff.py` (the raw OSC listener written while chasing the
 feedback dead end) is no longer needed for this but left in place as a generic diagnostic tool.
 
+### `beat_osc.py --list-devices` on the Pi: empty output while `beat-osc.service` is running
+
+**Found and confirmed 2026-07-31.** Running `./venv/bin/python3 beat_osc.py --list-devices` on the
+Pi while `beat-osc.service` was active printed the usual ALSA/JACK probe-noise (harmless — see
+below) but **zero** `[N] <device name> ...` lines, even though `arecord -l` showed the USB mic
+present as ALSA card 2. Stopping the service first (`sudo systemctl stop beat-osc.service`),
+re-running the exact same command, immediately showed `[0] USB AUDIO DEVICE: Audio (hw:2,0) (in: 2,
+default sr: 44100)`. Restarting the service afterward (`sudo systemctl start beat-osc.service`)
+returned to normal.
+
+Root cause is **not** a permissions issue (first guess, ruled out) — it's that PyAudio/PortAudio's
+device enumeration (`list_devices()` in `beat_osc.py`, `pa.get_device_info_by_index()`) briefly
+opens each ALSA device to query its capabilities (supported sample rates etc.) as part of building
+that info struct. If the device is already held open exclusively by another process (here:
+`beat-osc.service`'s own running `beat_osc.py`), that probe-open fails and PortAudio silently
+omits the device from enumeration — no error, no placeholder entry, it just doesn't appear. This
+looks identical to a permissions problem (empty list, no crash) but has a completely different
+fix: stop whatever's already holding the mic, don't touch group membership.
+
+**Practical rule: to run `--list-devices` (or anything else that opens the mic) on the Pi, stop
+`beat-osc.service` first, run it, then restart the service** — same pattern as the "check
+`tasklist.exe`, don't edit `.qxw` while QLC+ is running" caution elsewhere in this file, same
+underlying shape (a process silently holding a resource open causes another tool to misbehave in a
+way that looks like a different bug).
+
+The ALSA (`Unknown PCM ...`, `snd_func_refer` "Unable to find definition") and JACK ("jack server is
+not running") lines that print before the device list are unrelated startup-probe noise from
+PortAudio checking for optional ALSA plugins/JACK that this Pi doesn't have configured — they
+print every single run, service or standalone, list-devices or normal operation, and are not
+diagnostic of anything being wrong. Don't chase them; only the presence/absence of the actual
+`[N] ...` device line(s) after that noise block is meaningful.
+
+Once listed, the device index matters: `lichtsteuerung.conf`'s `MIC_DEVICE` must match PyAudio's
+own index from this list, **not** the ALSA card number from `arecord -l` (they're different
+numbering schemes — confirmed here: ALSA card 2, PyAudio index 0, since it's the only capture-
+capable device PyAudio sees). On this Pi, `MIC_DEVICE="0"` already matched correctly.
+
 ## Known gotchas: Chaser (`Type="Chaser"`) authoring
 
 Two independent issues have hit the "Farbwechsel" Chaser; both are now fixed in this file, but
