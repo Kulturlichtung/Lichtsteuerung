@@ -37,6 +37,24 @@ Kurzanleitung, `CLAUDE.md` das ausführliche Entwickler-Logbuch.
 - **`CLAUDE.md`** — technische Entwickler-Doku (Design-Entscheidungen, gefundene Bugs,
   Quellcode-Verifikationen gegen `mcallegari/qlcplus`).
 
+## DMX-Adressierung (Stand `v5.qxw`, Produktionsdatei)
+
+Alle Geräte hängen an **einem** Universum ("Universe 1", Ausgang "DMX USB" — reales DMX-USB-PRO-
+Interface). Adressen unten sind die 1-indexierten DMX-Kanalnummern (wie in der QLC+-UI angezeigt,
+= `<Address>` in der `.qxw` + 1):
+
+| Gerät | Start-Adresse | Kanäle | Kanalbelegung |
+|---|---|---|---|
+| Fun-Generation LED Pot 12x1W QCL RGB WW #1 | 1 | 8 | 1=Master, 2=R, 3=G, 4=B, 5=W, 6–8 unbenutzt |
+| Fun-Generation LED Pot 12x1W QCL RGB WW #2 | 9 | 8 | 9=Master, 10=R, 11=G, 12=B, 13=W, 14–16 unbenutzt |
+| Fun-Generation LED Pot 12x1W QCL RGB WW #3 | 17 | 8 | 17=Master, 18=R, 19=G, 20=B, 21=W, 22–24 unbenutzt |
+| Fun-Generation LED Pot 12x1W QCL RGB WW #4 | 25 | 8 | 25=Master, 26=R, 27=G, 28=B, 29=W, 30–32 unbenutzt |
+| Eurolite LED Mini Strobe Cluster SMD 48 | 33 | 3 | genaue Kanalbelegung nicht in diesem Dokument verifiziert (Standard-Fixture-Profil) |
+
+Fixture-Reihenfolge/Adressen sind fortlaufend ohne Lücken vergeben (Pot #1–4 dann Strobe direkt
+danach) — beim Hinzufügen eines neuen Geräts entsprechend ab Adresse 36 weitermachen, um
+Überlappungen zu vermeiden.
+
 ## Wie das Zusammenspiel funktioniert
 
 ```
