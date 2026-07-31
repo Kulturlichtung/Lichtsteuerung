@@ -1,0 +1,16 @@
+[Unit]
+Description=Lichtsteuerung WLAN-Hotspot (SSID/Passwort aus USB-Config)
+After=mnt-usbdata.mount NetworkManager.service
+Requires=mnt-usbdata.mount NetworkManager.service
+Before=qlcplus.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/lichtsteuerung/pi-setup/run-hotspot.sh
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

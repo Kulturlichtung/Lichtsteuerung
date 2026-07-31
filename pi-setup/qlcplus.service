@@ -8,8 +8,8 @@ StartLimitIntervalSec=0
 ExecStart=/opt/lichtsteuerung/pi-setup/run-qlcplus.sh
 Restart=on-failure
 RestartSec=3
-User=pi
-Group=pi
+User=<nutzername>
+Group=<nutzername>
 SupplementaryGroups=audio dialout
 
 [Install]
