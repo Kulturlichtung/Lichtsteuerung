@@ -478,11 +478,17 @@ direkt, ohne `overlayroot-chroot`/Reboot.
   aktiv (`mount` zeigt den Overlay-Root live, 2026-08-02). Weiterhin unbestätigt: WLAN-Hotspot
   (siehe eigener Punkt unten).
 - Auto-Layer-Feature ist noch nicht über einen ganzen Abend/mit echter Musik durchgetestet.
-  Zwei zugehörige Bugs wurden zwischenzeitlich gefunden und gefixt, beide noch nicht über eine
-  längere Session bestätigt: ein Mikrofon-Capture-Hang (native Stereo-Aufnahme statt
-  Mono/Float-Konvertierung durch PortAudio) und ein WebSocket-Send-Hang (Auto-Button-Klick
-  fror die komplette Audio-Erkennung ein, `beat_osc.py` commit `abc53f5`, 2026-08-02 — Fix:
-  Sends laufen jetzt über Queue + eigenen Sender-Thread statt direkt in der Audio-Loop).
+  Drei zugehörige Bugs wurden zwischenzeitlich gefunden, keiner noch über eine längere Session
+  bestätigt: ein WebSocket-Send-Hang (Auto-Button-Klick fror die komplette Audio-Erkennung ein,
+  `beat_osc.py` commit `abc53f5`, 2026-08-02, gefixt) und ein Mikrofon-Capture-Hang (Prozess
+  bleibt in einem ALSA-Read stecken, kein Crash, kein Log) — **trotz** des Stereo/S16-Fixes vom
+  31.07. am 2026-08-02 live erneut reproduziert (Syscall-Diagnose bestätigt: Hauptthread hängt
+  in `ppoll`, exakt gleiches Bild wie beim ersten Fund). Ursache weiterhin ungeklärt, wird
+  separat weiterverfolgt (siehe `CLAUDE.md`). Als Selbstheilung dagegen: `beat-osc.service` hat
+  jetzt einen systemd-Watchdog (`Type=notify`, `WatchdogSec=15`, commit `d024d47`,
+  2026-08-02) — Skript schickt nach jedem Mikrofon-Read ein Herzschlag-Signal; bleibt der Read
+  hängen, killt/restartet systemd den Dienst automatisch nach spätestens 15s. Heilt das Symptom
+  (kurze Beat-Lücke statt stundenlangem Totalausfall), nicht die eigentliche Ursache.
 - **WLAN-Hotspot (`hotspot.service`/`run-hotspot.sh`) ist neu und noch nicht auf echter
   Pi-Hardware getestet** — `nmcli`-Befehle gegen NetworkManager-Doku geprüft, aber nicht selbst
   durchgespielt (gleiche "erst live bestätigen"-Regel wie überall sonst in diesem Projekt). Beim
