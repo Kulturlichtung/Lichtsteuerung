@@ -469,6 +469,35 @@ sudo reboot
 Falls overlayroot auf diesem Pi (noch) nicht aktiv ist, reicht `git pull` + Service-Neustart
 direkt, ohne `overlayroot-chroot`/Reboot.
 
+**Ändert sich dabei eine `.service`-Datei** (z. B. `pi-setup/beat-osc.service`), reicht der
+`git pull` allein nicht — die *aktiv geladene* Kopie liegt unter `/etc/systemd/system/`, separat
+vom Repo-Klon, und wurde beim Ersteinrichten einmalig dorthin kopiert (siehe Schritt 6). `git
+pull` aktualisiert nur die Repo-Datei; ohne erneutes Kopieren bleibt die alte Unit-Version aktiv
+(genau das ist einem echten Watchdog-Update am 2026-08-02 passiert — stundenlang unbemerkt, bis
+`systemctl show ... | grep -i watchdog` `WatchdogUSec=0` statt des erwarteten Werts zeigte).
+`/etc` liegt genauso unterm overlay-geschützten Root wie `/opt` — dieselbe
+`overlayroot-chroot`+Reboot-Pflicht wie oben gilt auch hier:
+
+```
+sudo overlayroot-chroot
+sed "s/<nutzername>/<echter-username>/g" /opt/lichtsteuerung/pi-setup/beat-osc.service > /etc/systemd/system/beat-osc.service
+exit
+```
+(`mount point is busy` wieder erwartet, siehe oben)
+```
+sudo reboot
+```
+
+**Falle dabei: `$(whoami)` *innerhalb* der `overlayroot-chroot`-Sitzung liefert `root`**, nicht
+den echten Servicenutzer (Prompt wechselt sichtbar zu `root@.../#`) — den echten Nutzernamen von
+ausserhalb der Chroot-Sitzung einsetzen (z. B. der Name, der im normalen Shell-Prompt vor dem
+`overlayroot-chroot`-Aufruf steht), nicht `$(whoami)` im Chroot selbst verwenden.
+
+Danach verifizieren, dass die neue Unit-Version wirklich aktiv ist:
+```
+systemctl show beat-osc.service | grep -iE "type|watchdog"
+```
+
 ### Bekannte offene Punkte
 
 - Pi-Grundbetrieb (QLC+-Build, Projekt-Code, USB-Stick, systemd-Autostart, Beat-Detector) läuft
@@ -483,12 +512,19 @@ direkt, ohne `overlayroot-chroot`/Reboot.
   `beat_osc.py` commit `abc53f5`, 2026-08-02, gefixt) und ein Mikrofon-Capture-Hang (Prozess
   bleibt in einem ALSA-Read stecken, kein Crash, kein Log) — **trotz** des Stereo/S16-Fixes vom
   31.07. am 2026-08-02 live erneut reproduziert (Syscall-Diagnose bestätigt: Hauptthread hängt
-  in `ppoll`, exakt gleiches Bild wie beim ersten Fund). Ursache weiterhin ungeklärt, wird
-  separat weiterverfolgt (siehe `CLAUDE.md`). Als Selbstheilung dagegen: `beat-osc.service` hat
-  jetzt einen systemd-Watchdog (`Type=notify`, `WatchdogSec=15`, commit `d024d47`,
-  2026-08-02) — Skript schickt nach jedem Mikrofon-Read ein Herzschlag-Signal; bleibt der Read
-  hängen, killt/restartet systemd den Dienst automatisch nach spätestens 15s. Heilt das Symptom
-  (kurze Beat-Lücke statt stundenlangem Totalausfall), nicht die eigentliche Ursache.
+  in `ppoll`, exakt gleiches Bild wie beim ersten Fund; `/proc/asound/card2/stream0` zeigte dabei
+  `Status: Running` — ALSA/Hardware liefert nachweislich weiter, Bug sitzt sicher in
+  PyAudio/PortAudio selbst). Ursache weiterhin ungeklärt, wird separat weiterverfolgt (siehe
+  `CLAUDE.md`). Als Selbstheilung dagegen: `beat-osc.service` hat einen systemd-Watchdog
+  (`Type=notify`, `WatchdogSec=15`, commit `d024d47`, 2026-08-02) — Skript schickt nach jedem
+  Mikrofon-Read ein Herzschlag-Signal; bleibt der Read hängen, killt/restartet systemd den
+  Dienst automatisch nach spätestens 15s. Beim ersten realen Hänger griff er nicht, weil die neue
+  Unit-Datei nie nach `/etc/systemd/system/` re-installiert wurde (`git pull` aktualisiert nur
+  die Repo-Kopie, siehe Update-Sektion oben) — nach korrektem Redeploy bestätigt
+  `systemctl show beat-osc.service` jetzt `WatchdogUSec=15s` (2026-08-02). **Echte Auslösung bei
+  einem tatsächlichen Hänger (Neustart durch systemd, sichtbar in `journalctl` als `Watchdog
+  timeout`) noch nicht bestätigt.** Heilt im Erfolgsfall nur das Symptom (kurze Beat-Lücke statt
+  stundenlangem Totalausfall), nicht die eigentliche Ursache.
 - **WLAN-Hotspot (`hotspot.service`/`run-hotspot.sh`) ist neu und noch nicht auf echter
   Pi-Hardware getestet** — `nmcli`-Befehle gegen NetworkManager-Doku geprüft, aber nicht selbst
   durchgespielt (gleiche "erst live bestätigen"-Regel wie überall sonst in diesem Projekt). Beim

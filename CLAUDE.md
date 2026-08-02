@@ -758,6 +758,37 @@ with nobody there to notice. This is explicitly a safety net, not a fix — the 
 PortAudio/ALSA stall is still unexplained and worth continuing to chase per the diagnostic angles
 above, this just bounds the blast radius while that's ongoing.
 
+**Deployment pitfall found 2026-08-02: the watchdog didn't fire on its first real test —
+because the new unit file was never actually installed, not because the mechanism is broken.**
+`/proc/asound/card2/stream0` at the time of the (still ongoing) hang showed `Capture: Status:
+Running` at a normal `44100 Hz` — the ALSA ring buffer was genuinely still live, conclusively
+ruling out hardware/driver/USB and confirming (again) that the stall is purely on the
+PyAudio/PortAudio side above ALSA. `vcgencmd get_throttled` (`0x0`) and `measure_temp` (`56.0'C`)
+ruled out under-voltage/thermal throttling as a Pi-specific contributor too. But the service sat
+hung for over 4 minutes with the *same* PID and no restart at all -- `systemctl show
+beat-osc.service` showed `WatchdogUSec=0`, i.e. the watchdog was never actually configured on the
+live unit.
+
+Root cause of *that*: `pi-setup/beat-osc.service` is a template in the repo -- the actually
+*loaded* copy lives at `/etc/systemd/system/beat-osc.service`, installed once during initial
+setup via `sed ... | sudo tee ...` (README step 6). `git pull` only updates the repo's copy; nothing
+re-copies it to `/etc/systemd/system/` automatically. Same overlayroot trap as the earlier
+`git pull`-doesn't-persist issue, just one directory over -- `/etc` is under the same
+overlay-protected root as `/opt`, so the fix needs the same `overlayroot-chroot` + reboot
+dance, now documented in the README's update section alongside the code-update instructions.
+Extra gotcha specific to this file: `$(whoami)` *inside* an `overlayroot-chroot` session
+resolves to `root` (that shell's actual login), not the real service user -- the username has to
+be supplied literally, from outside the chroot, or the re-copied unit file silently gets `User=
+root`/`Group=root` instead of the intended account.
+
+Net effect: the watchdog mechanism itself (sd_notify heartbeat, `Type=notify`, `WatchdogSec=15`)
+never got a real chance to prove itself on its first test, since the unit that was actually
+running the whole time didn't have it configured. After redeploying the corrected unit file,
+`systemctl show beat-osc.service` confirmed `WatchdogUSec=15s` is now genuinely active
+(2026-08-02) -- config-level verification done. Still open: an actual watchdog-triggered
+restart during a real hang, confirmed via `journalctl -u beat-osc.service` showing a `Watchdog
+timeout` line followed by an automatic restart within ~15-20s -- next thing to watch for.
+
 ## Known gotchas: Chaser (`Type="Chaser"`) authoring
 
 Two independent issues have hit the "Farbwechsel" Chaser; both are now fixed in this file, but
