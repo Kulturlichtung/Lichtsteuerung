@@ -6,9 +6,19 @@ Wants=qlcplus.service
 StartLimitIntervalSec=0
 
 [Service]
+Type=notify
+NotifyAccess=main
 ExecStart=/opt/lichtsteuerung/pi-setup/run-beat-osc.sh
 Restart=on-failure
 RestartSec=3
+# beat_osc.py sends a heartbeat (sd_notify "WATCHDOG=1") right after each
+# successful mic read. The documented capture hang (CLAUDE.md: "Beat
+# detection silently hanging mid-session") leaves the process alive but
+# stuck inside a blocking ALSA read -- it never crashes, so plain
+# Restart=on-failure alone can't detect it. WatchdogSec catches the
+# missing heartbeat and restarts the unit (Restart=on-failure already
+# covers watchdog-triggered restarts per systemd.service(5)).
+WatchdogSec=15
 User=<nutzername>
 Group=<nutzername>
 SupplementaryGroups=audio

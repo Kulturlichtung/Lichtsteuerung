@@ -47,7 +47,9 @@ section for background.
 """
 
 import argparse
+import os
 import queue
+import socket
 import threading
 import time
 
@@ -97,6 +99,34 @@ LAYER_BUTTON_ID = {
     "blau-gelb": {"fade": 113, "direkt": 94, "alternierend": 114, "altaus": 127},
     "bunt": {"fade": 118, "direkt": 95, "alternierend": 122, "altaus": 128},
 }
+
+
+def sd_notify(message):
+    """Send a message to systemd's NOTIFY_SOCKET (sd_notify protocol),
+    stdlib-only (no python-sdnotify dependency needed for two message
+    types). No-op if not run under systemd (NOTIFY_SOCKET unset) --
+    e.g. when run directly for --list-devices or local testing.
+
+    Used for a Type=notify watchdog: the mic-capture hang documented in
+    CLAUDE.md ("Beat detection silently hanging mid-session") leaves the
+    process alive but stuck inside a blocking ALSA read -- it never
+    crashes or exits, so plain Restart=on-failure can't detect it. A
+    heartbeat sent right after each successful stream.read() naturally
+    stops the moment that read blocks forever, so systemd's own
+    WatchdogSec catches the hang and restarts the unit -- self-healing
+    for the symptom while the root cause (see CLAUDE.md) is still being
+    chased separately.
+    """
+    notify_socket = os.environ.get("NOTIFY_SOCKET")
+    if not notify_socket:
+        return
+    if notify_socket.startswith("@"):
+        notify_socket = "\0" + notify_socket[1:]
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
+            sock.sendto(message.encode(), notify_socket)
+    except OSError:
+        pass
 
 
 def list_devices():
@@ -422,12 +452,22 @@ def main():
     print(f"Listening (device={args.device}), sending OSC {args.address} "
           f"to {args.host}:{args.port} on each detected beat. "
           f"Ctrl+C to stop.")
+    sd_notify("READY=1")
+    last_watchdog_notify = time.monotonic()
 
     try:
         while True:
             raw = stream.read(CHUNK, exception_on_overflow=False)
             stereo = np.frombuffer(raw, dtype=np.int16).reshape(-1, CHANNELS)
             samples = stereo.mean(axis=1).astype(np.float32) / 32768.0
+
+            # Sent right after stream.read() returns -- if that call
+            # ever blocks forever (the hang this guards against), this
+            # heartbeat simply stops, and systemd's WatchdogSec notices.
+            now = time.monotonic()
+            if now - last_watchdog_notify >= 2.0:
+                sd_notify("WATCHDOG=1")
+                last_watchdog_notify = now
 
             spectrum = np.fft.rfft(samples)
             mag = np.abs(spectrum)

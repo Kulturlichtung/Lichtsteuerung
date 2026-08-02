@@ -664,7 +664,7 @@ pulling this change to the Pi, `sudo systemctl restart beat-osc.service` and re-
 `beat` / `[intensity]` / `[state]` lines as sound hits the mic — **not yet re-verified live on the
 Pi**, next thing to confirm once this fix is deployed there.
 
-### Beat detection silently hanging mid-session on the Pi (found and fixed 2026-07-31)
+### Beat detection silently hanging mid-session on the Pi (found 2026-07-31, recurred 2026-08-02 -- see update below)
 
 **Symptom:** `beat_osc.py` would work correctly for anywhere from ~1 to ~36 seconds after
 starting — real `beat` lines with sensible `flux`/`threshold` values, reacting to actual claps —
@@ -717,6 +717,46 @@ frame, which it is. **Not yet re-verified over a long unattended run** — confi
 symptom and its exact repro conditions before applying this fix, next step is a real extended
 listening session (ideally the length of an actual event) to confirm it's actually gone and not
 just less frequent.
+
+**Update 2026-08-02 — recurred despite the S16/native-format fix; root cause still open.** Live
+on the real Pi, with the fix already deployed and confirmed present (`grep` showed `CHANNELS=2`,
+`FORMAT=pyaudio.paInt16`), the exact same symptom happened again: `beat`/`[intensity]` lines
+stopped cold mid-session, no crash, `systemctl status` still `active (running)`. Re-ran the same
+diagnosis as the original find: `top -p <pid> -H` showed all 3 threads (audio, WebSocket,
+sender — the sender thread is new since the WebSocket-freeze fix below) `0.0% CPU`, sleeping.
+`sudo cat /proc/<pid>/task/*/syscall` — note this Pi is aarch64, **different syscall numbers
+than the x86_64 table implied by the original find** — showed: `73` (`ppoll`, aarch64) on the
+audio thread, `22` (`epoll_pwait`, aarch64) on the WebSocket thread (idle, as before), `98`
+(`futex`, aarch64) on the new sender thread (idle, blocked on an empty queue — expected, no Auto
+button had been pressed this time, ruling out any connection to the WebSocket-send fix below).
+Same exact shape as the original find: audio thread stuck in a blocking poll inside the ALSA
+read, everything else fine.
+
+Conclusion: the 2026-07-31 fix (native format, no PortAudio software conversion) did not
+eliminate this hang, only possibly reduced its frequency — consistent with that section's own
+"not yet re-verified" caveat turning out to matter. The actual root cause (something inside
+PortAudio's ALSA host API itself, still poorly understood) remains unfixed and is being pursued
+separately, without blocking the rest of the system on finding it (same "mitigate now, keep
+digging separately" split as the OSC-feedback dead end above). Next diagnostic angles to try,
+not yet attempted: `cat /proc/asound/card2/stream0` at the moment of a hang (distinguishes a
+stalled hardware ring buffer, state `XRUN`, from a purely software-side stall, state still
+`RUNNING`); an extended (hour-scale) raw `arecord` soak test as a control, since the original
+`arecord` test only ran 15s and a rare/slow-onset ALSA-level issue wouldn't necessarily show up
+in that short a window; `vcgencmd get_throttled` at hang time, to rule out under-voltage/thermal
+throttling as a Pi-specific contributor that wouldn't exist on the Windows dev machine.
+
+**Mitigation added 2026-08-02 (does not fix the root cause, only its unattended-deployment
+impact):** `beat-osc.service` now runs as `Type=notify` with `WatchdogSec=15`
+(`pi-setup/beat-osc.service`); `beat_osc.py` sends `sd_notify("READY=1")` once at startup and
+`sd_notify("WATCHDOG=1")` every ~2s from inside the main capture loop, right after
+`stream.read()` returns (stdlib `socket.AF_UNIX`/`SOCK_DGRAM` to `$NOTIFY_SOCKET`, no new pip
+dependency). Since the hang is specifically the read call itself blocking forever, the heartbeat
+naturally stops the instant that happens, and systemd's watchdog timeout kills and restarts the
+unit (`Restart=on-failure` already covers watchdog-triggered restarts per `systemd.service(5)`)
+— a several-second beat-detection gap on each occurrence instead of a silent multi-hour outage
+with nobody there to notice. This is explicitly a safety net, not a fix — the underlying
+PortAudio/ALSA stall is still unexplained and worth continuing to chase per the diagnostic angles
+above, this just bounds the blast radius while that's ongoing.
 
 ## Known gotchas: Chaser (`Type="Chaser"`) authoring
 
