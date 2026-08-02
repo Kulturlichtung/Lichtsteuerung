@@ -259,14 +259,18 @@ sudo chown "$(whoami):$(whoami)" /opt/lichtsteuerung
 git clone https://github.com/Kulturlichtung/Lichtsteuerung.git /opt/lichtsteuerung
 cd /opt/lichtsteuerung/beat-detector
 python3 -m venv --system-site-packages venv
-sudo apt install -y python3-pyaudio python3-numpy
-./venv/bin/pip install python-osc websocket-client
+sudo apt install -y python3-pyaudio python3-numpy libasound2-dev
+./venv/bin/pip install python-osc websocket-client pyalsaaudio
 ```
 `--system-site-packages` + `apt install python3-pyaudio python3-numpy`: vermeidet, `pyaudio`
 selbst gegen PortAudio-Header zu kompilieren (auf dem Pi über apt deutlich unkomplizierter,
-gleicher Grund wie schon für die Windows-Installation in diesem README).
+gleicher Grund wie schon für die Windows-Installation in diesem README). `pyalsaaudio` +
+`libasound2-dev`: der Pi nutzt standardmässig das `alsaaudio`-Backend (`AUDIO_BACKEND` in
+`lichtsteuerung.conf`, siehe unten) statt `pyaudio`/PortAudio — bestätigt 2026-08-02 als Fix für
+einen sonst wiederkehrenden Mikrofon-Capture-Hang (Details: `CLAUDE.md`).
 
-Mikrofon-Geräteindex ermitteln:
+Mikrofon-Geräteindex ermitteln (für `MIC_DEVICE` — nur relevant, falls doch mal auf
+`AUDIO_BACKEND="pyaudio"` zurückgewechselt wird, s. u.):
 ```
 ./venv/bin/python3 beat_osc.py --list-devices
 ```
@@ -275,6 +279,14 @@ beim Init alle in der ALSA-Konfig gelisteten virtuellen PCM-Devices durch, die m
 auf einem USB-Mikro schlicht nicht; kein JACK installiert/nötig) — kein Fehler, ignorieren.
 Relevant ist nur die letzte Zeile, z. B. `[0] USB AUDIO DEVICE: ... (in: 2, ...)` → Index `0` ist
 der `MIC_DEVICE`-Wert für `lichtsteuerung.conf`.
+
+Für den tatsächlich genutzten `ALSA_DEVICE`-Wert (Standard-Backend) stattdessen:
+```
+arecord -l
+```
+Zeigt die ALSA-Kartennummer (z. B. `card 2: ...`) → `ALSA_DEVICE="hw:2,0"` in
+`lichtsteuerung.conf`. **Andere Nummerierung als `MIC_DEVICE`** (PyAudio-Index vs. ALSA-Karte,
+auf diesem Pi z. B. Karte `2` vs. PyAudio-Index `0`) — nicht verwechseln.
 
 ### 4. USB-Stick vorbereiten und einbinden
 
@@ -533,15 +545,17 @@ systemctl show beat-osc.service | grep -iE "type|watchdog"
   Unit-Datei nie nach `/etc/systemd/system/` re-installiert wurde (`git pull` aktualisiert nur
   die Repo-Kopie, siehe Update-Sektion oben) — nach korrektem Redeploy **live bestätigt
   funktionierend** (2026-08-02, `journalctl` zeigt zwei saubere Watchdog-Neustarts kurz
-  hintereinander). Heilt aber nur das Symptom (kurze Beat-Lücke statt Totalausfall), nicht die
-  eigentliche Ursache — und die tritt gerade auffällig häufig auf (alle ~30-100s statt der
-  ursprünglich beschriebenen seltenen Fälle), macht aber auch die Ursachensuche leichter (schnell
-  reproduzierbar statt stundenlangem Warten). Neu zur Bisection: `--audio-backend alsaaudio`
-  (statt Standard `pyaudio`) umgeht PortAudio komplett, spricht ALSA direkt über `pyalsaaudio`
-  an (`pip install pyalsaaudio`, braucht `libasound2-dev`) — Gerät über `--alsa-device hw:2,0`
-  (ALSA-Kartennummer aus `arecord -l`, **nicht** der `--device`-Index aus `--list-devices`).
-  Hängt dieser Pfad über dieselbe Zeitspanne nicht, sitzt der Bug sicher in PortAudio selbst,
-  echter Fix (Backend dauerhaft wechseln) möglich. Noch nicht getestet.
+  hintereinander).
+
+  **Ursache mittlerweile gefunden und behoben, nicht mehr nur per Watchdog kaschiert:**
+  Bisections-Test mit `--audio-backend alsaaudio` (PortAudio komplett umgangen, ALSA direkt via
+  `pyalsaaudio`) lief 3 Minuten am Stück ohne einen einzigen Hänger, bei einer Bug-Frequenz von
+  sonst alle ~30-100s — bestätigt, der Bug sitzt exklusiv in PortAudio, nicht in ALSA/Kernel/
+  Hardware. **`alsaaudio` ist seit 2026-08-02 das Standard-Backend auf dem Pi**
+  (`AUDIO_BACKEND="alsaaudio"` in `lichtsteuerung.conf`, siehe Schritt 3) — `pyaudio` bleibt nur
+  intern in `beat_osc.py` der Default (fürs lokale Windows-Testen, da `pyalsaaudio`
+  Linux/ALSA-only ist). Noch nicht über eine ganze Session/Abend auf dem Pi mit dem neuen
+  Standard-Backend bestätigt — Watchdog bleibt trotzdem aktiv als Sicherheitsnetz.
 - **WLAN-Hotspot (`hotspot.service`/`run-hotspot.sh`) ist neu und noch nicht auf echter
   Pi-Hardware getestet** — `nmcli`-Befehle gegen NetworkManager-Doku geprüft, aber nicht selbst
   durchgespielt (gleiche "erst live bestätigen"-Regel wie überall sonst in diesem Projekt). Beim

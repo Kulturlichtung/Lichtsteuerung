@@ -30,6 +30,8 @@ fi
 # shellcheck disable=SC2086
 exec "$REPO_DIR/beat-detector/venv/bin/python3" -u beat_osc.py --auto \
     --device "${MIC_DEVICE:?MIC_DEVICE not set in $CONFIG}" \
+    --audio-backend "${AUDIO_BACKEND:-alsaaudio}" \
+    --alsa-device "${ALSA_DEVICE:-hw:2,0}" \
     --web-port "${WEB_PORT:-9999}" \
     --sensitivity "${SENSITIVITY:-3.5}" \
     --refractory-ms "${REFRACTORY_MS:-200}" \

@@ -14,8 +14,29 @@ AUTO_COLOR="blau-rosa"
 
 # Microphone device index for beat_osc.py (find via
 # `python3 beat_osc.py --list-devices` on the Pi -- USB device index,
-# will differ from any Windows test run).
+# will differ from any Windows test run). Only used for
+# AUDIO_BACKEND="pyaudio" -- ignored by "alsaaudio" (see ALSA_DEVICE
+# below instead).
 MIC_DEVICE="1"
+
+# Audio capture backend. "alsaaudio" (default here) bypasses PortAudio
+# entirely and talks to ALSA directly via pyalsaaudio -- confirmed
+# 2026-08-02 that PortAudio's own ALSA host API is the actual cause of
+# a mid-session capture hang on this Pi (CLAUDE.md: "Beat detection
+# silently hanging mid-session"); the alsaaudio backend ran hang-free
+# for 3+ minutes under conditions where the pyaudio backend was hanging
+# every 30-100 seconds. "pyaudio" remains the default *inside*
+# beat_osc.py itself (needed for local Windows testing, see README's
+# "Lokal testen" section, since pyalsaaudio is Linux/ALSA-only) -- this
+# is what makes the Pi's actual deployment use the fixed path.
+AUDIO_BACKEND="alsaaudio"
+
+# ALSA device string for AUDIO_BACKEND="alsaaudio", e.g. "hw:2,0" --
+# find via `arecord -l` on the Pi (ALSA card/device numbers, NOT the
+# same numbering as MIC_DEVICE/--list-devices, which is PyAudio's own
+# index -- the two schemes differ, confirmed on this Pi: ALSA card 2,
+# PyAudio index 0).
+ALSA_DEVICE="hw:2,0"
 
 # QLC+ Web Access port (must match between both services).
 WEB_PORT="9999"

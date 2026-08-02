@@ -821,13 +821,29 @@ a *different* numbering scheme than `--device`/`--list-devices`'s PyAudio index 
 deliberately not in `requirements.txt` as a hard dependency (only a comment pointing at it) since
 the default backend doesn't need it and it requires `libasound2-dev` via apt to build.
 
-**Not yet run** -- next step is deploying this to the Pi (where the hang is now reproducible
-within ~30-100s per the frequency finding above) and running `--audio-backend alsaaudio` for a
-few minutes: if it hangs just as often, the bug isn't specific to PortAudio after all (points
-back at something ALSA/kernel/driver-level despite the earlier evidence, or something in this
-script's own processing); if it runs clean, that's strong confirmation the bug is inside
-PortAudio's ALSA host API specifically, and switching the default backend permanently becomes the
-real fix (not just the watchdog mitigation).
+**Result, same day: ran clean.** `--audio-backend alsaaudio --alsa-device hw:2,0` on the Pi, ~3
+minutes continuous, real beats the whole time, zero hangs -- under conditions where the `pyaudio`
+backend had been hanging roughly every 30-100 seconds (per the frequency finding above), 3 minutes
+hang-free is decisive, not just suggestive. Confirms the bug is specifically inside PortAudio's
+ALSA host API, not ALSA/the kernel driver/the hardware/this script's own processing (identical
+downstream code path for both backends, only the capture layer differs).
+
+**Adopted as the real fix, not just kept as a diagnostic tool:** `pi-setup/run-beat-osc.sh` now
+passes `--audio-backend "${AUDIO_BACKEND:-alsaaudio}"` and `--alsa-device
+"${ALSA_DEVICE:-hw:2,0}"`; `pi-setup/lichtsteuerung.conf.example` documents both new variables,
+defaulting the Pi to `alsaaudio`. `beat_osc.py`'s own in-script default stays `pyaudio` --
+`pyalsaaudio` is Linux/ALSA-only and the local Windows testing workflow (README's "Lokal testen"
+section) still needs `pyaudio`, so the split is: script default = pyaudio (Windows-compatible),
+Pi's actual deployed config = alsaaudio (the fixed path). README's Pi setup step 3 now installs
+`libasound2-dev` + `pyalsaaudio` as a normal setup step, not just an optional diagnostic
+footnote. `MIC_DEVICE`/`--list-devices` (PyAudio indexing) still documented since they're needed
+if anyone ever switches back to `AUDIO_BACKEND="pyaudio"` for comparison/debugging.
+
+The systemd watchdog (above) stays in place regardless -- defense in depth, not redundant: it
+guards against any future hang (this one or a different one) in whichever backend ends up
+running, same unattended-Pi reasoning as when it was added. Not yet confirmed over a full
+real-world listening session with the new default backend (only the ~3 minute manual test so
+far) -- next real event is the actual test.
 
 **Second bug found and fixed 2026-08-02, same debugging session: the layer button often stayed
 inactive right after Auto was enabled** (reproduced right after boot with `--startup-auto-color`,
