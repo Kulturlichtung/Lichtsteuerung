@@ -47,6 +47,7 @@ section for background.
 """
 
 import argparse
+import queue
 import threading
 import time
 
@@ -167,6 +168,15 @@ class QLCWebSocket:
 
     Reconnects on drop (mirrors websocket.js's own 1s retry loop) since
     this is meant to run unattended for an entire event on the Pi.
+
+    send_press() is called from the main audio-capture loop (via
+    run_auto_layer_step) and must never block it -- a stalled/half-dead
+    socket blocking indefinitely here previously froze the whole capture
+    loop (no more beat/intensity processing at all, no crash, no log)
+    the instant the first layer-switch press was attempted. Actual
+    socket I/O is now done only by a dedicated sender thread, with a
+    bounded timeout so a bad send fails loud instead of hanging forever;
+    send_press() itself just enqueues and returns immediately.
     """
 
     def __init__(self, url, on_button, startup_auto_color=None):
@@ -176,6 +186,7 @@ class QLCWebSocket:
         self._connected = threading.Event()
         self._startup_widget_id = AUTO_BUTTON_ID.get(startup_auto_color)
         self._startup_done = False
+        self._send_queue = queue.Queue()
 
     def _on_open(self, ws):
         print(f"[ws] connected to {self.url}")
@@ -211,12 +222,27 @@ class QLCWebSocket:
             time.sleep(1)
 
     def send_press(self, widget_id):
-        if not self._connected.is_set() or self._ws is None:
-            print(f"[ws] not connected, dropping press for widget "
-                  f"{widget_id}")
-            return
-        self._ws.send(f"{widget_id}|1")
-        self._ws.send(f"{widget_id}|0")
+        self._send_queue.put(widget_id)
+
+    def sender_loop(self):
+        while True:
+            widget_id = self._send_queue.get()
+            if not self._connected.is_set() or self._ws is None:
+                print(f"[ws] not connected, dropping press for widget "
+                      f"{widget_id}")
+                continue
+            try:
+                # Bound the send instead of risking an indefinite block
+                # on a half-dead/stalled socket -- a slow send now just
+                # fails and logs, instead of freezing whoever's waiting
+                # on this thread (nobody, now that this runs off the
+                # audio loop -- but keep the bound anyway).
+                if self._ws.sock is not None:
+                    self._ws.sock.settimeout(2.0)
+                self._ws.send(f"{widget_id}|1")
+                self._ws.send(f"{widget_id}|0")
+            except Exception as e:
+                print(f"[ws] send failed for widget {widget_id}: {e}")
 
 
 class IntensityClassifier:
@@ -365,6 +391,9 @@ def main():
                                   startup_auto_color=args.startup_auto_color)
         thread = threading.Thread(target=ws_client.run_forever, daemon=True)
         thread.start()
+        sender_thread = threading.Thread(target=ws_client.sender_loop,
+                                          daemon=True)
+        sender_thread.start()
 
     chunk_dt = CHUNK / RATE
     baseline_alpha = 1 - np.exp(-chunk_dt / args.baseline_seconds)
