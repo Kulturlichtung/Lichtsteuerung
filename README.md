@@ -435,21 +435,37 @@ Kein Pi-Login nötig für alltägliche Änderungen: USB-Stick an einem anderen R
 `sudo systemctl restart hotspot.service qlcplus.service beat-osc.service`, falls er schon
 läuft — z. B. nach Ändern von `HOTSPOT_SSID`/`HOTSPOT_PASSWORD`).
 
+### Code-Updates (git pull) auf dem Pi einspielen
+
+`/opt/lichtsteuerung` liegt auf dem overlay-geschützten Root (Schritt 7) — ein einfaches
+`git pull` dort landet nur im flüchtigen tmpfs-Overlay und ist nach dem nächsten Reboot wieder
+weg. Über `overlayroot-chroot` einspielen, das schreibt sofort aufs echte Root-Dateisystem, kein
+Reboot nötig:
+
+```
+sudo overlayroot-chroot
+cd /opt/lichtsteuerung
+git pull
+exit
+sudo systemctl restart beat-osc.service   # + qlcplus.service, falls sich eine .qxw geändert hat
+```
+
+Falls overlayroot auf diesem Pi (noch) nicht aktiv ist, reicht `git pull` + Service-Neustart
+direkt, ohne `overlayroot-chroot`.
+
 ### Bekannte offene Punkte
 
-- Dieser komplette Pi-Abschnitt ist **nicht auf echter Pi-Hardware verifiziert** (Stand
-  2026-07-30) — Befehle/Paketnamen gegen offizielle QLC+-Wiki-Doku und aktuelle Web-Recherche
-  geprüft, aber nicht selbst durchgespielt. Beim ersten echten Durchlauf Schritt für Schritt
-  bestätigen, nicht blind vertrauen (gleiche Regel wie überall sonst in diesem Projekt).
-- `QT_QPA_PLATFORM=offscreen` für den Headless-Betrieb (kein Display) **bestätigt auf echter
-  Pi-5-Hardware 2026-07-31**: `qlcplus --version` schlug ohne die Variable mit
-  `qt.qpa.xcb: could not connect to display` fehl, mit `QT_QPA_PLATFORM=offscreen` lief's
-  fehlerfrei (`Q Light Controller Plus version 4.14.4`). `run-qlcplus.sh` setzt das bereits für
-  den echten Service — Schritt 2 selbst (`qlcplus --version` als reiner Build-Test) hatte es
-  vorher nicht in der Anleitung, jetzt nachgetragen (siehe oben). Kein Fallback (`xvfb-run` o.ä.)
-  mehr nötig.
-- Auto-Layer-Feature selbst ist laut `CLAUDE.md` noch nicht über einen ganzen Abend/mit echter
-  Musik durchgetestet.
+- Pi-Grundbetrieb (QLC+-Build, Projekt-Code, USB-Stick, systemd-Autostart, Beat-Detector) läuft
+  inzwischen produktiv auf echter Pi-5-Hardware und wurde mehrfach live debuggt (Mikrofon-
+  Geräteliste, `journalctl`-Pufferungs-Fix, Capture-Hang-Fix, WebSocket-Freeze-Fix — Stand
+  2026-08-02, Details in `CLAUDE.md`). Weiterhin unbestätigt: WLAN-Hotspot (siehe eigener Punkt
+  unten) und ob `overlayroot` (Schritt 7) auf diesem Pi tatsächlich aktiviert ist.
+- Auto-Layer-Feature ist noch nicht über einen ganzen Abend/mit echter Musik durchgetestet.
+  Zwei zugehörige Bugs wurden zwischenzeitlich gefunden und gefixt, beide noch nicht über eine
+  längere Session bestätigt: ein Mikrofon-Capture-Hang (native Stereo-Aufnahme statt
+  Mono/Float-Konvertierung durch PortAudio) und ein WebSocket-Send-Hang (Auto-Button-Klick
+  fror die komplette Audio-Erkennung ein, `beat_osc.py` commit `abc53f5`, 2026-08-02 — Fix:
+  Sends laufen jetzt über Queue + eigenen Sender-Thread statt direkt in der Audio-Loop).
 - **WLAN-Hotspot (`hotspot.service`/`run-hotspot.sh`) ist neu und noch nicht auf echter
   Pi-Hardware getestet** — `nmcli`-Befehle gegen NetworkManager-Doku geprüft, aber nicht selbst
   durchgespielt (gleiche "erst live bestätigen"-Regel wie überall sonst in diesem Projekt). Beim
