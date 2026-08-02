@@ -2,3 +2,8 @@ pyaudio
 numpy
 python-osc
 websocket-client
+# pyalsaaudio: only needed for --audio-backend alsaaudio (diagnostic
+# bisection for the PortAudio capture hang, see CLAUDE.md). Not installed
+# by default since the normal pyaudio backend doesn't need it; install
+# manually (`pip install pyalsaaudio`, needs `libasound2-dev` via apt) to
+# test that backend.

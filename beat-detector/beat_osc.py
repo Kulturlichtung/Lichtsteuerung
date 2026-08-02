@@ -328,17 +328,45 @@ class IntensityClassifier:
         return self.committed_band, level_db
 
 
-def run_auto_layer_step(ws_client, state, band):
+LAYER_PRESS_COOLDOWN_S = 1.0
+
+
+def run_auto_layer_step(ws_client, state, band, last_command):
+    """last_command: {color: (desired_layer, monotonic_time_sent)}, mutated
+    in place across calls.
+
+    Called every audio-loop tick (~23ms). QLC+'s Web Access feedback
+    round-trip (state.active_layer() only updates once the button-press
+    broadcast comes back) takes much longer than one tick, so comparing
+    only against the *confirmed* state every tick re-fires a fresh press
+    on every single tick until confirmation catches up -- and since these
+    are Action=Toggle buttons, each extra press flips it again. An even
+    number of these before confirmation arrives leaves the layer back off
+    (reproduced live: logged 3 presses for one transition, net state
+    landed on/off unpredictably by parity of how many got sent). Debounce
+    by remembering what was last *commanded* for this color and not
+    re-sending the same target again until either it's confirmed or
+    LAYER_PRESS_COOLDOWN_S has passed (long enough for a normal round
+    trip, short enough to retry a dropped press) -- still re-fires
+    immediately for a genuinely new desired_layer, or if a human's own
+    tablet tap changes the confirmed layer to something else.
+    """
     active_color = state.active_auto_color()
     if active_color is None:
         return
     desired_layer = LAYERS[band]
     current_layer = state.active_layer(active_color)
-    if current_layer != desired_layer:
-        widget_id = LAYER_BUTTON_ID[active_color][desired_layer]
-        ws_client.send_press(widget_id)
-        print(f"[auto] {active_color}: {current_layer} -> {desired_layer} "
-              f"(widget {widget_id})")
+    if current_layer == desired_layer:
+        return
+    prev_layer, prev_time = last_command.get(active_color, (None, 0.0))
+    now = time.monotonic()
+    if prev_layer == desired_layer and (now - prev_time) < LAYER_PRESS_COOLDOWN_S:
+        return
+    widget_id = LAYER_BUTTON_ID[active_color][desired_layer]
+    ws_client.send_press(widget_id)
+    last_command[active_color] = (desired_layer, now)
+    print(f"[auto] {active_color}: {current_layer} -> {desired_layer} "
+          f"(widget {widget_id})")
 
 
 def main():
@@ -405,6 +433,26 @@ def main():
                               "persist before a layer switch is sent, to "
                               "avoid flapping at a boundary (default: "
                               "2000)")
+    parser.add_argument("--audio-backend", choices=("pyaudio", "alsaaudio"),
+                         default="pyaudio",
+                         help="Audio capture backend. 'pyaudio' (default) "
+                              "is the normal PortAudio path. 'alsaaudio' "
+                              "bypasses PortAudio entirely and talks to "
+                              "ALSA directly (pyalsaaudio) -- diagnostic "
+                              "bisection for the still-unexplained capture "
+                              "hang documented in CLAUDE.md ('Beat "
+                              "detection silently hanging mid-session'): "
+                              "raw `arecord` in this format never hangs, "
+                              "PyAudio/PortAudio does -- this backend "
+                              "tests whether pyalsaaudio, a much thinner "
+                              "wrapper around the same ALSA calls arecord "
+                              "uses, hangs too or not")
+    parser.add_argument("--alsa-device", default="hw:2,0",
+                         help="ALSA device string for --audio-backend "
+                              "alsaaudio, e.g. hw:2,0 (see `arecord -l` "
+                              "for the card/device numbers -- NOT the "
+                              "same numbering as --device/--list-devices, "
+                              "which is PyAudio's own index)")
     args = parser.parse_args()
 
     if args.list_devices:
@@ -436,10 +484,31 @@ def main():
     def send_beat():
         send_beat_press(osc, args.address)
 
-    pa = pyaudio.PyAudio()
-    stream = pa.open(format=FORMAT, channels=CHANNELS, rate=RATE,
-                      input=True, input_device_index=args.device,
-                      frames_per_buffer=CHUNK)
+    if args.audio_backend == "alsaaudio":
+        import alsaaudio
+        pcm = alsaaudio.PCM(alsaaudio.PCM_CAPTURE, alsaaudio.PCM_NORMAL,
+                             device=args.alsa_device)
+        pcm.setchannels(CHANNELS)
+        pcm.setrate(RATE)
+        pcm.setformat(alsaaudio.PCM_FORMAT_S16_LE)
+        pcm.setperiodsize(CHUNK)
+
+        def read_chunk():
+            # length != CHUNK (a partial period, or <0 on an ALSA-level
+            # error/xrun) would desync the FFT size below -- drop that
+            # chunk rather than risk a shape mismatch against band_mask.
+            length, data = pcm.read()
+            if length != CHUNK:
+                return None
+            return data
+    else:
+        pa = pyaudio.PyAudio()
+        stream = pa.open(format=FORMAT, channels=CHANNELS, rate=RATE,
+                          input=True, input_device_index=args.device,
+                          frames_per_buffer=CHUNK)
+
+        def read_chunk():
+            return stream.read(CHUNK, exception_on_overflow=False)
 
     freqs = np.fft.rfftfreq(CHUNK, d=1.0 / RATE)
     band_mask = (freqs >= BAND_LOW_HZ) & (freqs <= BAND_HIGH_HZ)
@@ -448,6 +517,7 @@ def main():
     flux_history = []
     last_beat_time = 0.0
     last_committed_band = None
+    last_layer_command = {}
 
     print(f"Listening (device={args.device}), sending OSC {args.address} "
           f"to {args.host}:{args.port} on each detected beat. "
@@ -457,12 +527,14 @@ def main():
 
     try:
         while True:
-            raw = stream.read(CHUNK, exception_on_overflow=False)
+            raw = read_chunk()
+            if raw is None:
+                continue
             stereo = np.frombuffer(raw, dtype=np.int16).reshape(-1, CHANNELS)
             samples = stereo.mean(axis=1).astype(np.float32) / 32768.0
 
-            # Sent right after stream.read() returns -- if that call
-            # ever blocks forever (the hang this guards against), this
+            # Sent right after read_chunk() returns -- if that call ever
+            # blocks forever (the hang this guards against), this
             # heartbeat simply stops, and systemd's WatchdogSec notices.
             now = time.monotonic()
             if now - last_watchdog_notify >= 2.0:
@@ -503,14 +575,18 @@ def main():
                     print(f"[intensity] band -> {LAYERS[band]} "
                           f"(level={level_db:+.1f} dB)")
                     last_committed_band = band
-                run_auto_layer_step(ws_client, state, band)
+                run_auto_layer_step(ws_client, state, band, last_layer_command)
 
     except KeyboardInterrupt:
         print("\nStopping.")
     finally:
-        stream.stop_stream()
-        stream.close()
-        pa.terminate()
+        if args.audio_backend == "alsaaudio":
+            if hasattr(pcm, "close"):
+                pcm.close()
+        else:
+            stream.stop_stream()
+            stream.close()
+            pa.terminate()
 
 
 if __name__ == "__main__":

@@ -806,6 +806,52 @@ entirely, talk to ALSA directly like the never-hanging `arecord` control does) m
 attractive to try soon -- a result either way (hangs just as often / doesn't hang at all) would
 come back within minutes instead of requiring an hours-long soak test.
 
+**Bisection tool added 2026-08-02:** `beat_osc.py --audio-backend alsaaudio` (default remains
+`pyaudio`, unchanged behavior) swaps the capture path to `pyalsaaudio`'s `alsaaudio.PCM(...)`
+instead of `pa.open(...)` -- same `S16_LE`/stereo/44100Hz/`CHUNK`-sized reads, but talking to
+ALSA directly with no PortAudio layer in between, structurally much closer to the raw `arecord`
+control that has never hung than to the PyAudio path that keeps hanging. `read_chunk()` is now
+an abstraction selected once at startup based on `--audio-backend`, used by the main loop instead
+of a hardcoded `stream.read()`; the alsaaudio branch drops (returns `None`, skips the chunk
+rather than risking a shape mismatch against `band_mask`) any read that doesn't return exactly
+`CHUNK` frames, since `PCM_NORMAL` mode is expected to always deliver a full period but a
+defensive check costs nothing. Needs `--alsa-device` (an ALSA `hw:X,Y` string from `arecord -l`,
+a *different* numbering scheme than `--device`/`--list-devices`'s PyAudio index -- see the
+"MIC_DEVICE" note elsewhere in this doc for why those two numberings differ). `pyalsaaudio` is
+deliberately not in `requirements.txt` as a hard dependency (only a comment pointing at it) since
+the default backend doesn't need it and it requires `libasound2-dev` via apt to build.
+
+**Not yet run** -- next step is deploying this to the Pi (where the hang is now reproducible
+within ~30-100s per the frequency finding above) and running `--audio-backend alsaaudio` for a
+few minutes: if it hangs just as often, the bug isn't specific to PortAudio after all (points
+back at something ALSA/kernel/driver-level despite the earlier evidence, or something in this
+script's own processing); if it runs clean, that's strong confirmation the bug is inside
+PortAudio's ALSA host API specifically, and switching the default backend permanently becomes the
+real fix (not just the watchdog mitigation).
+
+**Second bug found and fixed 2026-08-02, same debugging session: the layer button often stayed
+inactive right after Auto was enabled** (reproduced right after boot with `--startup-auto-color`,
+and again right after a watchdog-triggered restart). Root cause: `run_auto_layer_step` runs every
+audio-loop tick (~23ms) and re-fires a press whenever the *confirmed* layer (from
+`WebAccessState`, which only updates once QLC+ Web Access's broadcast round-trip completes --
+much slower than one tick) doesn't yet match the desired one. That meant several presses could go
+out for the same transition before the first confirmation ever arrived. The layer buttons are all
+`Action=Toggle` (confirmed in `v6.qxw`, e.g. widget 115) -- each extra press flips the button
+again, so an even number of presses before confirmation catches up leaves it back off, an odd
+number leaves it on, pure timing-dependent parity. Live log evidence of exactly this: three
+consecutive `[auto] blau-rosa: None -> fade` attempts logged for one single intended transition,
+with the confirmed state bouncing `ON -> off -> ON` in between.
+
+**Fix:** `run_auto_layer_step` now takes a `last_command` dict (`{color: (desired_layer,
+monotonic_time)}`, threaded through from `main()`, mutated in place across calls) and skips
+re-sending a press for the same already-in-flight target until either it's confirmed or
+`LAYER_PRESS_COOLDOWN_S` (1.0s -- comfortably longer than a normal Web Access round trip, short
+enough to retry if a press was genuinely dropped) has passed. Still reacts immediately to an
+actually new desired layer, or to a human's own tablet tap changing the confirmed state to
+something else -- only the same-target repeat-fire is suppressed. Not yet re-verified live after
+this fix (next boot / next watchdog restart should show a single `[auto]` line per transition,
+no more flapping).
+
 ## Known gotchas: Chaser (`Type="Chaser"`) authoring
 
 Two independent issues have hit the "Farbwechsel" Chaser; both are now fixed in this file, but

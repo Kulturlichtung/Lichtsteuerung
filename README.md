@@ -133,6 +133,17 @@ der ursprüngliche OSC-Feedback-Ansatz verworfen wurde: `CLAUDE.md`.
 Noch kein vollständiger End-to-End-Test mit echter Musik über einen ganzen Abend. `v6.qxw` ist
 weiterhin ein Entwurf, kein bestätigter Ersatz für `v5.qxw`.
 
+**Bug gefunden und gefixt 2026-08-02: Ebenen-Button blieb nach Auto-Aktivierung manchmal
+inaktiv** (reproduziert nach Boot und nach Watchdog-Neustart). Ursache: `run_auto_layer_step`
+lief jeden Audio-Loop-Tick (~23ms) neu, solange der bestätigte Zustand noch nicht mit dem
+gewünschten übereinstimmte — die Web-Access-Bestätigung braucht aber länger als einen Tick,
+wodurch mehrere Presses rausgingen, bevor die erste Bestätigung zurückkam. Die Ebenen-Buttons
+sind `Action=Toggle` — jeder zusätzliche Press schaltet wieder um, bei gerader Anzahl Presses
+landet der Button auf "aus" statt "an", reine Zufallssache je nach Timing. Fix: Presse pro Farbe
+werden jetzt für 1s "gemerkt" (`last_layer_command`) und nicht erneut gesendet, solange auf
+Bestätigung des exakt gleichen Ziels gewartet wird — reagiert weiterhin sofort, wenn sich das
+gewünschte Ziel ändert oder ein Mensch manuell einen anderen Button drückt.
+
 ---
 
 ## Raspberry Pi: Schritt-für-Schritt-Einrichtung
@@ -525,7 +536,12 @@ systemctl show beat-osc.service | grep -iE "type|watchdog"
   hintereinander). Heilt aber nur das Symptom (kurze Beat-Lücke statt Totalausfall), nicht die
   eigentliche Ursache — und die tritt gerade auffällig häufig auf (alle ~30-100s statt der
   ursprünglich beschriebenen seltenen Fälle), macht aber auch die Ursachensuche leichter (schnell
-  reproduzierbar statt stundenlangem Warten).
+  reproduzierbar statt stundenlangem Warten). Neu zur Bisection: `--audio-backend alsaaudio`
+  (statt Standard `pyaudio`) umgeht PortAudio komplett, spricht ALSA direkt über `pyalsaaudio`
+  an (`pip install pyalsaaudio`, braucht `libasound2-dev`) — Gerät über `--alsa-device hw:2,0`
+  (ALSA-Kartennummer aus `arecord -l`, **nicht** der `--device`-Index aus `--list-devices`).
+  Hängt dieser Pfad über dieselbe Zeitspanne nicht, sitzt der Bug sicher in PortAudio selbst,
+  echter Fix (Backend dauerhaft wechseln) möglich. Noch nicht getestet.
 - **WLAN-Hotspot (`hotspot.service`/`run-hotspot.sh`) ist neu und noch nicht auf echter
   Pi-Hardware getestet** — `nmcli`-Befehle gegen NetworkManager-Doku geprüft, aber nicht selbst
   durchgespielt (gleiche "erst live bestätigen"-Regel wie überall sonst in diesem Projekt). Beim
