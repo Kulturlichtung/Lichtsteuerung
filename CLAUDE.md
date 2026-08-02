@@ -785,9 +785,26 @@ Net effect: the watchdog mechanism itself (sd_notify heartbeat, `Type=notify`, `
 never got a real chance to prove itself on its first test, since the unit that was actually
 running the whole time didn't have it configured. After redeploying the corrected unit file,
 `systemctl show beat-osc.service` confirmed `WatchdogUSec=15s` is now genuinely active
-(2026-08-02) -- config-level verification done. Still open: an actual watchdog-triggered
-restart during a real hang, confirmed via `journalctl -u beat-osc.service` showing a `Watchdog
-timeout` line followed by an automatic restart within ~15-20s -- next thing to watch for.
+(2026-08-02) -- config-level verification done.
+
+**Confirmed working live, same session, 2026-08-02:** `journalctl` caught two real
+watchdog-triggered restarts back to back: last beat at 18:53:07, `Watchdog timeout (limit 15s)!`
+at 18:53:22, `SIGABRT`, clean restart with `Listening...` again by 18:53:26; then last beat at
+18:54:22, timeout at 18:54:38, restarted by 18:54:41. Self-healing mechanism fully verified end
+to end -- process hangs, systemd notices within 15s, kills and restarts it automatically, no
+manual intervention.
+
+Also notable from this same evidence: **the hang is currently recurring far more often** than
+the original "anywhere from ~1 to ~36 seconds after starting, then silent for the rest of the
+session" description suggested -- here it recurred roughly every 30-100 seconds, twice within
+about two minutes. Whatever's wrong seems to have gotten more frequent (or the original
+description undersold how bad it can get), which is bad for actual usability (the watchdog
+bounds each individual outage to ~15-20s, but back-to-back like this it's a very choppy listening
+experience) but good for root-causing it: a bug this reproducible is actually easy to bisect now.
+Makes the previously-proposed `pyalsaaudio` swap test (bypass PortAudio's ALSA host API
+entirely, talk to ALSA directly like the never-hanging `arecord` control does) much more
+attractive to try soon -- a result either way (hangs just as often / doesn't hang at all) would
+come back within minutes instead of requiring an hours-long soak test.
 
 ## Known gotchas: Chaser (`Type="Chaser"`) authoring
 

@@ -520,11 +520,12 @@ systemctl show beat-osc.service | grep -iE "type|watchdog"
   Mikrofon-Read ein Herzschlag-Signal; bleibt der Read hängen, killt/restartet systemd den
   Dienst automatisch nach spätestens 15s. Beim ersten realen Hänger griff er nicht, weil die neue
   Unit-Datei nie nach `/etc/systemd/system/` re-installiert wurde (`git pull` aktualisiert nur
-  die Repo-Kopie, siehe Update-Sektion oben) — nach korrektem Redeploy bestätigt
-  `systemctl show beat-osc.service` jetzt `WatchdogUSec=15s` (2026-08-02). **Echte Auslösung bei
-  einem tatsächlichen Hänger (Neustart durch systemd, sichtbar in `journalctl` als `Watchdog
-  timeout`) noch nicht bestätigt.** Heilt im Erfolgsfall nur das Symptom (kurze Beat-Lücke statt
-  stundenlangem Totalausfall), nicht die eigentliche Ursache.
+  die Repo-Kopie, siehe Update-Sektion oben) — nach korrektem Redeploy **live bestätigt
+  funktionierend** (2026-08-02, `journalctl` zeigt zwei saubere Watchdog-Neustarts kurz
+  hintereinander). Heilt aber nur das Symptom (kurze Beat-Lücke statt Totalausfall), nicht die
+  eigentliche Ursache — und die tritt gerade auffällig häufig auf (alle ~30-100s statt der
+  ursprünglich beschriebenen seltenen Fälle), macht aber auch die Ursachensuche leichter (schnell
+  reproduzierbar statt stundenlangem Warten).
 - **WLAN-Hotspot (`hotspot.service`/`run-hotspot.sh`) ist neu und noch nicht auf echter
   Pi-Hardware getestet** — `nmcli`-Befehle gegen NetworkManager-Doku geprüft, aber nicht selbst
   durchgespielt (gleiche "erst live bestätigen"-Regel wie überall sonst in diesem Projekt). Beim
