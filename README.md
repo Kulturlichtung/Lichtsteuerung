@@ -439,27 +439,44 @@ läuft — z. B. nach Ändern von `HOTSPOT_SSID`/`HOTSPOT_PASSWORD`).
 
 `/opt/lichtsteuerung` liegt auf dem overlay-geschützten Root (Schritt 7) — ein einfaches
 `git pull` dort landet nur im flüchtigen tmpfs-Overlay und ist nach dem nächsten Reboot wieder
-weg. Über `overlayroot-chroot` einspielen, das schreibt sofort aufs echte Root-Dateisystem, kein
-Reboot nötig:
+weg. Über `overlayroot-chroot` einspielen, das schreibt sofort aufs echte Root-Dateisystem:
 
 ```
 sudo overlayroot-chroot
 cd /opt/lichtsteuerung
 git pull
 exit
-sudo systemctl restart beat-osc.service   # + qlcplus.service, falls sich eine .qxw geändert hat
+```
+
+**Der `exit` endet praktisch immer mit `mount: /media/root-ro: mount point is busy` —
+erwartet, kein Fehlerzustand zum Beheben.** Bestätigt 2026-08-02: kein hängender Prozess
+dahinter (`fuser -vm /media/root-ro` leer, kein `/proc`/`/sys`/`/dev` mehr drunter gemountet,
+manueller `mount -o remount,ro`-Retry scheitert ebenso). Grund ist strukturell: `/` läuft live
+als Overlay mit `lowerdir=/media/root-ro` — jeder Prozess mit einer noch offenen, nicht ins
+tmpfs hochkopierten Datei über `/` hält intern eine Referenz auf die echte Datei im ext4
+darunter, was `fuser` (prüft nur den Mountpoint direkt) nicht anzeigt, der Kernel beim Remount
+aber trotzdem als busy zählt. Mit laufendem System praktisch nie sauber vermeidbar — nicht
+weiter nachjagen.
+
+**Danach immer rebooten**, nicht nur Services neu starten — das Overlay ist nach jedem
+Neustart ohnehin komplett frisch scharf, unabhängig vom Exit-Status davor, und ist der einzige
+Weg, den Schreibschutz nach dem `exit`-Fehler zuverlässig wieder zu aktivieren:
+
+```
+sudo reboot
 ```
 
 Falls overlayroot auf diesem Pi (noch) nicht aktiv ist, reicht `git pull` + Service-Neustart
-direkt, ohne `overlayroot-chroot`.
+direkt, ohne `overlayroot-chroot`/Reboot.
 
 ### Bekannte offene Punkte
 
 - Pi-Grundbetrieb (QLC+-Build, Projekt-Code, USB-Stick, systemd-Autostart, Beat-Detector) läuft
   inzwischen produktiv auf echter Pi-5-Hardware und wurde mehrfach live debuggt (Mikrofon-
   Geräteliste, `journalctl`-Pufferungs-Fix, Capture-Hang-Fix, WebSocket-Freeze-Fix — Stand
-  2026-08-02, Details in `CLAUDE.md`). Weiterhin unbestätigt: WLAN-Hotspot (siehe eigener Punkt
-  unten) und ob `overlayroot` (Schritt 7) auf diesem Pi tatsächlich aktiviert ist.
+  2026-08-02, Details in `CLAUDE.md`). `overlayroot` (Schritt 7) läuft auf diesem Pi bestätigt
+  aktiv (`mount` zeigt den Overlay-Root live, 2026-08-02). Weiterhin unbestätigt: WLAN-Hotspot
+  (siehe eigener Punkt unten).
 - Auto-Layer-Feature ist noch nicht über einen ganzen Abend/mit echter Musik durchgetestet.
   Zwei zugehörige Bugs wurden zwischenzeitlich gefunden und gefixt, beide noch nicht über eine
   längere Session bestätigt: ein Mikrofon-Capture-Hang (native Stereo-Aufnahme statt
