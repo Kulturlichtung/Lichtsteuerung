@@ -27,12 +27,11 @@
       </div>
     </div>
     <p class="hint">
-      Die Schwellenlinie ist kein fester Wert, sondern wird laufend aus
-      Mittelwert/Streuung des Flux-Fensters neu berechnet
-      (<code>Schwelle = Mittelwert + Sensitivity &times; Streuung</code>).
-      Beim Ziehen der Linie wird daraus einmalig ein neuer Sensitivity-Wert
-      errechnet -- die Linie wandert danach durch neue Messwerte minimal
-      weiter, das ist normal, kein Fehler.
+      Die blaue Linie zeigt das Signal normalisiert in derselben Einheit wie
+      Sensitivity (Streuungen über dem gleitenden Mittelwert). Die orange
+      Linie ist die eingestellte Sensitivity selbst -- konstant, sie
+      bewegt sich nur, wenn du sie ziehst oder das Zahlenfeld änderst. Ein
+      Beat wird ausgelöst, sobald die blaue Linie die orange überschreitet.
     </p>
   </section>
 

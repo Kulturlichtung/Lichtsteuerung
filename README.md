@@ -180,12 +180,14 @@ Hand zu editieren und den Dienst neu zu starten. Läuft im selben Prozess wie `b
 **Erreichbar:** `http://<Pi-IP-oder-Hostname>/` (Port `UI_PORT` aus `lichtsteuerung.conf`, auf dem
 Pi standardmäßig `80` — siehe unten zu Hostnamen). Zeigt zwei Live-Diagramme (aktualisieren sich
 ~10x/Sekunde):
-- **Beat-Erkennung** — der rohe Flux-Wert plus eine Linie für die aktuelle Schwelle. Die Schwelle
-  ist **kein** fester Wert, sondern wird laufend aus `Mittelwert + Sensitivity × Streuung` des
-  Flux-Fensters berechnet — Ziehen an der Linie rechnet das einmalig in einen neuen
-  `Sensitivity`-Wert um; danach wandert die Linie durch neue Messwerte minimal weiter, das ist
-  normal, kein Bug. Alternativ direkt per Zahlenfeld setzen (schreibt `Sensitivity` direkt, keine
-  Umrechnung nötig).
+- **Beat-Erkennung** — das Signal, normalisiert in derselben Einheit wie `Sensitivity`
+  (`z = (Flux − Mittelwert) / Streuung` des Flux-Fensters — genau der Vergleich, den `beat_osc.py`
+  intern macht: ein Beat feuert, sobald `z > Sensitivity`), plus eine **konstante** Linie bei der
+  eingestellten `Sensitivity`. Ziehen der Linie setzt `Sensitivity` direkt auf die neue Position —
+  keine Umrechnung nötig, die Linie bewegt sich nur noch, wenn der Wert tatsächlich geändert wird,
+  nicht mehr laufend mit der Musik. *(Ursprünglich wurde stattdessen der rohe Flux-Wert gegen
+  eine mitlaufende Schwelle geplottet — unterschiedliche, für Sensitivity nicht intuitive Einheit,
+  siehe `CLAUDE.md`.)* Alternativ direkt per Zahlenfeld setzen.
 - **Auto-Stufen (Intensität)** — der dB-Pegel plus 3 unabhängig verschiebbare Linien für die
   Fade/Direkt/Alternierend/AltAus-Grenzen. Kreuzen sich zwei Linien beim Ziehen, sortiert der
   Server sie automatisch wieder aufsteigend (nötig, da die Auto-Layer-Logik aufsteigende Reihenfolge

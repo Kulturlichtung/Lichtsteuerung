@@ -1029,6 +1029,39 @@ the service bind port 80 on a real systemd/Pi (only reasoned from `systemd.exec(
 behavior), mDNS over the real hotspot, and whether this 4th thread has any interaction with the
 still-unexplained mic-capture hang over a long real session.
 
+**First real usage feedback (2026-09-03), two UX bugs found and fixed in `static/app.js`:**
+
+1. **Beat-chart threshold line looked like it was randomly jumping between 5 and 10, with no
+   visible relation to the Sensitivity field's "3.1".** Root cause: the chart was plotting the raw
+   `flux` value (arbitrary FFT-magnitude units, swings with the music's loudness) against the
+   *computed* `threshold = mean + sensitivity*std` (same arbitrary units) -- correct data, but the
+   wrong comparison to show a user tuning `sensitivity`, which only exists as a multiplier of
+   *std deviations above the mean*, not as a value in flux's own units at all. Fixed by having the
+   client compute `z = (flux - mean) / std` instead (same unit sensitivity is already in -- this is
+   just beat_osc.py's own beat condition, `flux > mean + sensitivity*std`, rearranged) and plotting
+   *that* against a threshold line fixed at `y = sensitivity`. Two knock-on simplifications: the
+   line is now genuinely constant (`applyConfig` sets it once, `applyMetrics` no longer touches it
+   at all -- previously it was rewritten every ~100ms tick even when nothing had changed, which is
+   what actually produced the "flickering" look), and `onBeatDragEnd` dropped its inverse-math
+   entirely (`(draggedY - lastMean) / lastStd`) since the dropped y-position now *is* the
+   sensitivity value directly -- `lastMean`/`lastStd` tracking vars removed as dead code. The
+   original inversion approach (still described as the design in this section's earlier text,
+   correct at the time) is superseded by this -- kept in git history, not worth re-describing here.
+2. **The line visibly frayed/unraveled at the chart's left edge just before points scrolled off,
+   "sieht aus als wäre der Puffer zu klein".** Root cause: both charts let Chart.js auto-range the
+   x-axis to the actual data extent, and `trimOld()` dropped points the instant they aged past
+   exactly `WINDOW_S` (30s) -- so the line's leftmost point sat exactly on the axis boundary and
+   got deleted the moment it crossed it, with no data point beyond the visible edge left to clip
+   the drawn line against. Fixed two ways together: `scales.x.min`/`max` are now pinned explicitly
+   every update (`pinXAxis()`, `[latestT - WINDOW_S, latestT]`) instead of relying on Chart.js's
+   auto-range, and the actual retention buffer (`BUFFER_S = WINDOW_S + 5`) is a few seconds wider
+   than what's shown, so there's always a real point just past the left edge for the line to be
+   clipped against cleanly instead of ending mid-air.
+
+Not yet re-verified live after this fix (same "not yet verified on real hardware" status as the
+rest of this section) -- next real Pi/tablet session should show a flat, still Sensitivity line
+that only moves on an actual edit, and a clean left edge with no visible fraying.
+
 ## Known gotchas: Chaser (`Type="Chaser"`) authoring
 
 Two independent issues have hit the "Farbwechsel" Chaser; both are now fixed in this file, but
