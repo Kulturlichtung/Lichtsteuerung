@@ -193,7 +193,16 @@ Pi standardmäßig `80` — siehe unten zu Hostnamen). Zeigt zwei Live-Diagramme
 
 Jede Änderung wirkt **sofort** (live im laufenden Prozess) und wird — mit 0.75s Verzögerung, damit
 ein Zieh-Gestus nicht bei jedem Pixel schreibt — zurück in `lichtsteuerung.conf` auf dem USB-Stick
-geschrieben (atomar, übersteht einen Stromausfall mitten im Schreiben).
+geschrieben. Dabei werden **nur** die geänderten `KEY="value"`-Zeilen ersetzt (gezielter
+Zeilen-Ersatz per Regex, kein Bash-Parser) — Kommentare, Reihenfolge und alle anderen Zeilen
+bleiben unangetastet; zusätzlich atomar geschrieben (Temp-Datei + `os.replace()`), übersteht also
+auch einen Stromausfall mitten im Schreiben.
+
+Ein Button **"Auf Standard zurücksetzen"** setzt `SENSITIVITY`/`INTENSITY_THRESHOLDS_DB` auf feste,
+in `lichtsteuerung.conf` hinterlegte Referenzwerte zurück (`DEFAULT_SENSITIVITY`,
+`DEFAULT_INTENSITY_THRESHOLDS_DB`) — unabhängig davon, was die beiden eigentlichen Werte gerade
+sind. Praktisch, um nach dem Live-Experimentieren wieder auf einem bekannt guten Ausgangspunkt zu
+landen.
 
 Oben auf der Seite führt ein Button direkt zu QLC+ Web Access (Port 9999) — diese Seite ist
 effektiv die Startseite für die tablet-basierte Bedienung.

@@ -89,3 +89,12 @@ INTENSITY_EMA_ALPHA="0.15"
 # Minimum time (ms) a new intensity band must persist before a layer
 # switch is actually sent, to avoid flapping at a boundary.
 BAND_HOLD_MS="2000"
+
+# Values the tuning web UI's "Auf Standard zurücksetzen" button resets
+# SENSITIVITY / INTENSITY_THRESHOLDS_DB to -- a fixed known-good
+# baseline to get back to after experimenting live, independent of
+# whatever SENSITIVITY/INTENSITY_THRESHOLDS_DB above are currently set
+# to. Same format as those two (single number / 3 ascending
+# space-separated numbers).
+DEFAULT_SENSITIVITY="3.1"
+DEFAULT_INTENSITY_THRESHOLDS_DB="0.7 2.5 8.0"

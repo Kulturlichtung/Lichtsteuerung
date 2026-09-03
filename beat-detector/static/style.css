@@ -54,6 +54,18 @@ a.qlc-link {
   font-weight: 600;
 }
 
+button.reset-btn {
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border);
+  padding: 0.4rem 0.8rem;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+button.reset-btn:hover { border-color: var(--accent); color: var(--accent); }
+button.reset-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
 main {
   padding: 1rem 1.25rem 2rem;
   display: flex;

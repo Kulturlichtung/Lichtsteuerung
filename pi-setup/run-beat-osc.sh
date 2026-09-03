@@ -24,9 +24,11 @@ if [ -n "${AUTO_COLOR:-}" ]; then
     startup_color_args=(--startup-auto-color "$AUTO_COLOR")
 fi
 
-# INTENSITY_THRESHOLDS_DB is "D1 D2 D3" (space-separated) in the config --
-# deliberately unquoted below so it word-splits into 3 separate args, since
-# beat_osc.py's --intensity-thresholds-db takes 3 (nargs=3).
+# INTENSITY_THRESHOLDS_DB and DEFAULT_INTENSITY_THRESHOLDS_DB are both
+# "D1 D2 D3" (space-separated) in the config -- deliberately unquoted
+# below so each word-splits into 3 separate args, since beat_osc.py's
+# --intensity-thresholds-db/--default-intensity-thresholds-db each take
+# 3 (nargs=3).
 # shellcheck disable=SC2086
 exec "$REPO_DIR/beat-detector/venv/bin/python3" -u beat_osc.py --auto \
     --device "${MIC_DEVICE:?MIC_DEVICE not set in $CONFIG}" \
@@ -39,6 +41,8 @@ exec "$REPO_DIR/beat-detector/venv/bin/python3" -u beat_osc.py --auto \
     --baseline-seconds "${BASELINE_SECONDS:-120}" \
     --intensity-ema-alpha "${INTENSITY_EMA_ALPHA:-0.15}" \
     --band-hold-ms "${BAND_HOLD_MS:-2000}" \
+    --default-sensitivity "${DEFAULT_SENSITIVITY:-3.1}" \
+    --default-intensity-thresholds-db ${DEFAULT_INTENSITY_THRESHOLDS_DB:-0.7 2.5 8.0} \
     --web-ui \
     --ui-port "${UI_PORT:-80}" \
     --config-file "$CONFIG" \

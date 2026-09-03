@@ -526,6 +526,19 @@ def main():
                               "persist before a layer switch is sent, to "
                               "avoid flapping at a boundary (default: "
                               "2000)")
+    parser.add_argument("--default-sensitivity", type=float, default=3.1,
+                         help="Value the tuning web UI's 'reset to "
+                              "default' button sets --sensitivity to "
+                              "(default: 3.1). Purely a reset target -- "
+                              "does not itself change the live starting "
+                              "value, that's still --sensitivity")
+    parser.add_argument("--default-intensity-thresholds-db", type=float,
+                         nargs=3, default=(0.7, 2.5, 8.0),
+                         metavar=("D1", "D2", "D3"),
+                         help="Values the tuning web UI's 'reset to "
+                              "default' button sets "
+                              "--intensity-thresholds-db to (default: "
+                              "0.7 2.5 8.0)")
     parser.add_argument("--audio-backend", choices=("pyaudio", "alsaaudio"),
                          default="pyaudio",
                          help="Audio capture backend. 'pyaudio' (default) "
@@ -609,7 +622,10 @@ def main():
             band_hold_ms=args.band_hold_ms,
             intensity_ema_alpha=args.intensity_ema_alpha,
             baseline_seconds=args.baseline_seconds,
-            chunk_dt=chunk_dt)
+            chunk_dt=chunk_dt,
+            default_sensitivity=args.default_sensitivity,
+            default_intensity_thresholds_db=
+                args.default_intensity_thresholds_db)
         metrics_queue = queue.Queue(maxsize=4)
         web_ui.start_web_ui_thread(
             host=args.ui_host, port=args.ui_port, live_config=live_config,

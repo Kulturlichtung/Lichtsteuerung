@@ -1007,7 +1007,23 @@ confirming: the config message on connect, a live metrics broadcast, `set_sensit
 `set_intensity_thresholds` round-tripping through the server (including sorting a deliberately
 out-of-order `[9.0, 1.0, 5.0]` input back to `[1.0, 5.0, 9.0]`), and the debounced write actually
 landing in a scratch copy of `lichtsteuerung.conf` with every unrelated line byte-identical
-afterward and no stray temp file left behind. Not checked here at all: real touch-drag interaction
+afterward and no stray temp file left behind.
+
+**"Reset to default" (added 2026-09-03, same day, after a user question about whether
+`update_conf_file` really only touches the changed keys -- confirmed yes, exactly the smoke test
+above).** `LiveConfig` gained `default_sensitivity`/`default_intensity_thresholds_db` -- fixed
+reference values set once at startup from `beat_osc.py`'s new `--default-sensitivity`/
+`--default-intensity-thresholds-db` flags (in turn from `lichtsteuerung.conf`'s new
+`DEFAULT_SENSITIVITY`/`DEFAULT_INTENSITY_THRESHOLDS_DB`, default `3.1` / `0.7 2.5 8.0`), never
+changed at runtime themselves. A new WS message `{"type": "reset_to_default"}` calls
+`LiveConfig.reset_to_default()`, which just calls the existing `set_sensitivity`/
+`set_intensity_thresholds_db` setters with those fixed values -- reuses the same clamp/sort/
+broadcast/debounced-persist path every other edit already goes through, no new code path to
+maintain. The web UI's button sends this on click; smoke-tested the same way as every other WS
+message (round-trip through a real `aiohttp` client, then confirmed the persisted conf file
+actually reads back `3.1` / `0.7 2.5 8`).
+
+Not checked here at all: real touch-drag interaction
 with `chartjs-plugin-annotation` on a tablet browser, whether `AmbientCapabilities` actually lets
 the service bind port 80 on a real systemd/Pi (only reasoned from `systemd.exec(5)`'s documented
 behavior), mDNS over the real hotspot, and whether this 4th thread has any interaction with the

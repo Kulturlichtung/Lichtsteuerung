@@ -25,6 +25,7 @@
   const d1Input = document.getElementById("d1");
   const d2Input = document.getElementById("d2");
   const d3Input = document.getElementById("d3");
+  const resetBtn = document.getElementById("reset-defaults-btn");
 
   let ws = null;
   let lastMean = null;
@@ -171,10 +172,18 @@
       if (!draggingIntensity.d2) { anns.d2.yMin = d2; anns.d2.yMax = d2; }
       if (!draggingIntensity.d3) { anns.d3.yMin = d3; anns.d3.yMax = d3; }
       intensityChart.update("none");
+
+      const [dd1, dd2, dd3] = cfg.default_intensity_thresholds_db;
+      resetBtn.title = `Setzt Sensitivity=${cfg.default_sensitivity} und ` +
+        `D1/D2/D3=${dd1}/${dd2}/${dd3}`;
     } finally {
       applyingRemoteConfig = false;
     }
   }
+
+  resetBtn.addEventListener("click", () => {
+    sendMessage({ type: "reset_to_default" });
+  });
 
   sensitivityInput.addEventListener("change", () => {
     if (applyingRemoteConfig) return;
@@ -218,6 +227,7 @@
     const disabled = !connected;
     document.getElementById("beat-controls").dataset.disabled = String(disabled);
     document.getElementById("intensity-controls").dataset.disabled = String(disabled);
+    resetBtn.disabled = disabled;
   }
 
   function connect() {

@@ -52,7 +52,8 @@ class LiveConfig:
     """
 
     def __init__(self, sensitivity, intensity_thresholds_db, band_hold_ms,
-                 intensity_ema_alpha, baseline_seconds, chunk_dt):
+                 intensity_ema_alpha, baseline_seconds, chunk_dt,
+                 default_sensitivity, default_intensity_thresholds_db):
         self.sensitivity = sensitivity
         self.intensity_thresholds_db = tuple(sorted(intensity_thresholds_db))
         self.band_hold_s = band_hold_ms / 1000.0
@@ -60,6 +61,18 @@ class LiveConfig:
         self._chunk_dt = chunk_dt
         self.baseline_seconds = baseline_seconds
         self.baseline_alpha = 1 - math.exp(-chunk_dt / baseline_seconds)
+        # Fixed reference values for the web UI's "reset to default"
+        # button -- set once at startup (from lichtsteuerung.conf's
+        # DEFAULT_SENSITIVITY/DEFAULT_INTENSITY_THRESHOLDS_DB, or
+        # beat_osc.py's own --default-* flags), never changed at
+        # runtime themselves.
+        self.default_sensitivity = default_sensitivity
+        self.default_intensity_thresholds_db = tuple(
+            sorted(default_intensity_thresholds_db))
+
+    def reset_to_default(self):
+        self.set_sensitivity(self.default_sensitivity)
+        self.set_intensity_thresholds_db(self.default_intensity_thresholds_db)
 
     def set_sensitivity(self, value):
         try:
@@ -87,6 +100,9 @@ class LiveConfig:
         return {
             "sensitivity": self.sensitivity,
             "intensity_thresholds_db": list(self.intensity_thresholds_db),
+            "default_sensitivity": self.default_sensitivity,
+            "default_intensity_thresholds_db":
+                list(self.default_intensity_thresholds_db),
         }
 
 
@@ -240,6 +256,9 @@ async def handle_ws(request):
             elif msg_type == "set_intensity_thresholds":
                 live_config.set_intensity_thresholds_db(
                     data.get("values", []))
+                changed = True
+            elif msg_type == "reset_to_default":
+                live_config.reset_to_default()
                 changed = True
             if changed:
                 # Re-broadcast to *all* clients, not just the sender --
