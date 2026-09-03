@@ -2,6 +2,11 @@ pyaudio
 numpy
 python-osc
 websocket-client
+aiohttp
+# chartjs-plugin-annotation (the draggable threshold lines in the tuning
+# web UI) needs no Python-side package -- it's a plain client-side JS
+# file, fetched onto the Pi at setup/update time (README step 3), not a
+# pip dependency.
 # pyalsaaudio: needed for --audio-backend alsaaudio, the Pi's default as
 # of 2026-08-02 (confirmed fix for a PortAudio-side capture hang, see
 # CLAUDE.md) -- install separately (`pip install pyalsaaudio`, needs

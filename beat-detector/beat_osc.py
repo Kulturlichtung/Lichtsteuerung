@@ -193,6 +193,11 @@ class WebAccessState:
         return None
 
 
+ALL_TRACKED_WIDGET_IDS = list(AUTO_BUTTON_ID.values()) + [
+    wid for layers in LAYER_BUTTON_ID.values() for wid in layers.values()
+]
+
+
 class QLCWebSocket:
     """Thin wrapper around QLC+ Web Access's WebSocket endpoint.
 
@@ -207,25 +212,32 @@ class QLCWebSocket:
     socket I/O is now done only by a dedicated sender thread, with a
     bounded timeout so a bad send fails loud instead of hanging forever;
     send_press() itself just enqueues and returns immediately.
+
+    On connect, queries the real current state of every Auto/layer
+    button (QLC+API|getWidgetStatus, confirmed against webaccess.cpp at
+    the QLC+_4.14.4 tag) instead of assuming everything starts off. This
+    replaces an earlier version that blindly pressed --startup-auto-color's
+    Auto button on every connect: since these are Action=Toggle buttons,
+    a press after a process restart (e.g. a watchdog-triggered restart of
+    *this* script -- QLC+ itself keeps running and keeps its state) could
+    silently flip an already-active Auto back off. See run_invariant_loop
+    for what actually presses buttons based on this state now.
     """
 
-    def __init__(self, url, on_button, startup_auto_color=None):
+    def __init__(self, url, on_button):
         self.url = url
         self.on_button = on_button
         self._ws = None
         self._connected = threading.Event()
-        self._startup_widget_id = AUTO_BUTTON_ID.get(startup_auto_color)
-        self._startup_done = False
         self._send_queue = queue.Queue()
 
     def _on_open(self, ws):
         print(f"[ws] connected to {self.url}")
         self._connected.set()
-        if self._startup_widget_id is not None and not self._startup_done:
-            # Pre-select a color at boot (e.g. for unattended Pi startup)
-            # by pressing its Auto button once, same as a tablet tap.
-            self.send_press(self._startup_widget_id)
-            self._startup_done = True
+        # Sync local state with QLC+'s actual state before anything
+        # decides whether to press a button -- see class docstring.
+        for widget_id in ALL_TRACKED_WIDGET_IDS:
+            self.query_status(widget_id)
 
     def _on_close(self, ws, close_status_code, close_msg):
         print("[ws] connection closed, will retry in 1s")
@@ -241,6 +253,15 @@ class QLCWebSocket:
                 self.on_button(int(parts[0]), int(parts[2]))
             except ValueError:
                 pass
+        elif (len(parts) >= 4 and parts[0] == "QLC+API"
+                and parts[1] == "getWidgetStatus"):
+            # Reply to our own query_status() -- same wID|status shape
+            # as a BUTTON broadcast, so it's fed through the same
+            # on_button callback (WebAccessState.handle_button).
+            try:
+                self.on_button(int(parts[2]), int(parts[3]))
+            except ValueError:
+                pass
 
     def run_forever(self):
         while True:
@@ -252,13 +273,16 @@ class QLCWebSocket:
             time.sleep(1)
 
     def send_press(self, widget_id):
-        self._send_queue.put(widget_id)
+        self._send_queue.put(("press", widget_id))
+
+    def query_status(self, widget_id):
+        self._send_queue.put(("query", widget_id))
 
     def sender_loop(self):
         while True:
-            widget_id = self._send_queue.get()
+            kind, widget_id = self._send_queue.get()
             if not self._connected.is_set() or self._ws is None:
-                print(f"[ws] not connected, dropping press for widget "
+                print(f"[ws] not connected, dropping {kind} for widget "
                       f"{widget_id}")
                 continue
             try:
@@ -269,10 +293,13 @@ class QLCWebSocket:
                 # audio loop -- but keep the bound anyway).
                 if self._ws.sock is not None:
                     self._ws.sock.settimeout(2.0)
-                self._ws.send(f"{widget_id}|1")
-                self._ws.send(f"{widget_id}|0")
+                if kind == "press":
+                    self._ws.send(f"{widget_id}|1")
+                    self._ws.send(f"{widget_id}|0")
+                else:
+                    self._ws.send(f"QLC+API|getWidgetStatus|{widget_id}")
             except Exception as e:
-                print(f"[ws] send failed for widget {widget_id}: {e}")
+                print(f"[ws] send failed for {kind} widget {widget_id}: {e}")
 
 
 class IntensityClassifier:
@@ -290,12 +317,11 @@ class IntensityClassifier:
     that self-baselining trap.
     """
 
-    def __init__(self, baseline_alpha, thresholds_db, ema_alpha,
-                 band_hold_s):
-        self.baseline_alpha = baseline_alpha
-        self.thresholds_db = thresholds_db  # (d1, d2, d3), d1 < d2 < d3
-        self.ema_alpha = ema_alpha
-        self.band_hold_s = band_hold_s
+    def __init__(self, live_config):
+        # Reads live_config.* fresh every update() call (not cached at
+        # construction) so the tuning web UI's edits take effect
+        # immediately -- see web_ui.LiveConfig.
+        self.live_config = live_config
 
         self.fast = None
         self.slow = None
@@ -304,22 +330,27 @@ class IntensityClassifier:
         self.candidate_since = 0.0
 
     def update(self, samples):
+        lc = self.live_config
         rms = float(np.sqrt(np.mean(np.square(samples))))
         self.fast = (rms if self.fast is None else
-                     self.ema_alpha * rms + (1 - self.ema_alpha) * self.fast)
+                     lc.intensity_ema_alpha * rms +
+                     (1 - lc.intensity_ema_alpha) * self.fast)
         self.slow = (rms if self.slow is None else
-                     self.baseline_alpha * rms +
-                     (1 - self.baseline_alpha) * self.slow)
+                     lc.baseline_alpha * rms +
+                     (1 - lc.baseline_alpha) * self.slow)
 
         level_db = 20 * np.log10((self.fast + 1e-9) / (self.slow + 1e-9))
-        candidate = sum(1 for t in self.thresholds_db if level_db > t)
+        # thresholds_db is kept ascending by LiveConfig's own setter (a
+        # web-UI drag can momentarily cross two handles; sorting there,
+        # not here, is what makes this sum() meaningful).
+        candidate = sum(1 for t in lc.intensity_thresholds_db if level_db > t)
 
         now = time.monotonic()
         if candidate != self.committed_band:
             if candidate != self.candidate_band:
                 self.candidate_band = candidate
                 self.candidate_since = now
-            elif now - self.candidate_since >= self.band_hold_s:
+            elif now - self.candidate_since >= lc.band_hold_s:
                 self.committed_band = candidate
                 self.candidate_band = None
         else:
@@ -367,6 +398,68 @@ def run_auto_layer_step(ws_client, state, band, last_command):
     last_command[active_color] = (desired_layer, now)
     print(f"[auto] {active_color}: {current_layer} -> {desired_layer} "
           f"(widget {widget_id})")
+
+
+STARTUP_GRACE_S = 5.0
+
+
+def run_invariant_loop(ws_client, state, startup_auto_color, last_command):
+    """Independent safety-net thread, decoupled from the audio-capture
+    loop on purpose -- so it keeps enforcing even if that loop is stuck
+    in the still-unexplained mic-read hang documented in CLAUDE.md
+    ("Beat detection silently hanging mid-session"). That hang is the
+    likely explanation for "Auto activates on boot but the light often
+    doesn't come on": the WebSocket thread that turns Auto on is
+    independent of the audio thread, so Auto can end up confirmed ON
+    while run_auto_layer_step (which only runs inside the audio loop's
+    tick) never got a chance to press the matching layer button, e.g.
+    because the loop hung before its first iteration during boot, right
+    when USB audio is still settling.
+
+    Two responsibilities, checked every 2s:
+    1. --startup-auto-color: after a grace period for the connect-time
+       getWidgetStatus queries to come back (see QLCWebSocket docstring),
+       press that color's Auto button *only if* no color's Auto is
+       confirmed active yet -- avoids blindly toggling an Auto that's
+       already on from a prior run (a plain restart of this script does
+       not restart QLC+, so its state persists across that restart).
+    2. Whichever color currently has Auto confirmed active: if it has no
+       layer confirmed active at all, press Fade as the default. Never
+       touches an already-active layer -- that's run_auto_layer_step's
+       job, driven by live intensity. This only fills the gap where
+       Auto is on and *nothing* underneath it is running.
+    """
+    start = time.monotonic()
+    startup_done = False
+    while True:
+        time.sleep(2.0)
+
+        if startup_auto_color and not startup_done:
+            if time.monotonic() - start >= STARTUP_GRACE_S:
+                if state.active_auto_color() is None:
+                    widget_id = AUTO_BUTTON_ID[startup_auto_color]
+                    ws_client.send_press(widget_id)
+                    print(f"[invariant] no Auto color confirmed active "
+                          f"after boot, pressing Auto {startup_auto_color} "
+                          f"(widget {widget_id})")
+                startup_done = True
+
+        active_color = state.active_auto_color()
+        if active_color is None:
+            continue
+        if state.active_layer(active_color) is not None:
+            continue
+
+        prev_layer, prev_time = last_command.get(active_color, (None, 0.0))
+        now = time.monotonic()
+        if (prev_layer == "fade"
+                and (now - prev_time) < LAYER_PRESS_COOLDOWN_S):
+            continue
+        widget_id = LAYER_BUTTON_ID[active_color]["fade"]
+        ws_client.send_press(widget_id)
+        last_command[active_color] = ("fade", now)
+        print(f"[invariant] Auto {active_color} active with no layer, "
+              f"forcing fade (widget {widget_id})")
 
 
 def main():
@@ -453,6 +546,32 @@ def main():
                               "for the card/device numbers -- NOT the "
                               "same numbering as --device/--list-devices, "
                               "which is PyAudio's own index)")
+
+    parser.add_argument("--web-ui", action="store_true",
+                         help="Enable the tuning web UI (live charts + "
+                              "draggable threshold lines for sensitivity "
+                              "and the 3 intensity-band boundaries). "
+                              "Opt-in, mirrors --auto -- a plain local "
+                              "test run doesn't unexpectedly open a "
+                              "network port, and aiohttp is only "
+                              "imported if this is set")
+    parser.add_argument("--ui-host", default="0.0.0.0",
+                         help="Bind address for the tuning web UI "
+                              "(default: 0.0.0.0, so a tablet on the "
+                              "Pi's own hotspot can reach it -- use "
+                              "127.0.0.1 for local-only testing)")
+    parser.add_argument("--ui-port", type=int, default=8080,
+                         help="Port for the tuning web UI (default: "
+                              "8080, unprivileged -- the Pi's own conf "
+                              "overrides this to 80 for real deployment, "
+                              "which needs CAP_NET_BIND_SERVICE, see "
+                              "pi-setup/beat-osc.service)")
+    parser.add_argument("--config-file", default=None,
+                         help="Path to lichtsteuerung.conf, so edits "
+                              "made in the tuning web UI persist back "
+                              "to it. Without this, edits stay "
+                              "live-only (in-memory) and are lost on "
+                              "restart")
     args = parser.parse_args()
 
     if args.list_devices:
@@ -463,23 +582,54 @@ def main():
 
     state = WebAccessState()
     ws_client = None
+    last_layer_command = {}
     if args.auto:
         ws_url = f"ws://{args.host}:{args.web_port}/qlcplusWS"
-        ws_client = QLCWebSocket(ws_url, on_button=state.handle_button,
-                                  startup_auto_color=args.startup_auto_color)
+        ws_client = QLCWebSocket(ws_url, on_button=state.handle_button)
         thread = threading.Thread(target=ws_client.run_forever, daemon=True)
         thread.start()
         sender_thread = threading.Thread(target=ws_client.sender_loop,
                                           daemon=True)
         sender_thread.start()
+        invariant_thread = threading.Thread(
+            target=run_invariant_loop,
+            args=(ws_client, state, args.startup_auto_color,
+                  last_layer_command),
+            daemon=True)
+        invariant_thread.start()
 
     chunk_dt = CHUNK / RATE
-    baseline_alpha = 1 - np.exp(-chunk_dt / args.baseline_seconds)
-    classifier = IntensityClassifier(
-        baseline_alpha=baseline_alpha,
-        thresholds_db=tuple(args.intensity_thresholds_db),
-        ema_alpha=args.intensity_ema_alpha,
-        band_hold_s=args.band_hold_ms / 1000.0)
+
+    metrics_queue = None
+    if args.web_ui:
+        import web_ui  # lazy: no hard aiohttp dependency unless --web-ui
+        live_config = web_ui.LiveConfig(
+            sensitivity=args.sensitivity,
+            intensity_thresholds_db=args.intensity_thresholds_db,
+            band_hold_ms=args.band_hold_ms,
+            intensity_ema_alpha=args.intensity_ema_alpha,
+            baseline_seconds=args.baseline_seconds,
+            chunk_dt=chunk_dt)
+        metrics_queue = queue.Queue(maxsize=4)
+        web_ui.start_web_ui_thread(
+            host=args.ui_host, port=args.ui_port, live_config=live_config,
+            metrics_queue=metrics_queue, config_file=args.config_file)
+    else:
+        # No web UI -- a plain namespace with the same attributes
+        # IntensityClassifier reads, so it doesn't need to know or care
+        # whether live editing is available.
+        class _StaticConfig:
+            pass
+        live_config = _StaticConfig()
+        live_config.sensitivity = args.sensitivity
+        live_config.intensity_thresholds_db = tuple(
+            sorted(args.intensity_thresholds_db))
+        live_config.band_hold_s = args.band_hold_ms / 1000.0
+        live_config.intensity_ema_alpha = args.intensity_ema_alpha
+        live_config.baseline_alpha = 1 - np.exp(
+            -chunk_dt / args.baseline_seconds)
+
+    classifier = IntensityClassifier(live_config)
 
     def send_beat():
         send_beat_press(osc, args.address)
@@ -517,7 +667,11 @@ def main():
     flux_history = []
     last_beat_time = 0.0
     last_committed_band = None
-    last_layer_command = {}
+    last_metrics_push = 0.0
+    # last_layer_command is shared with run_invariant_loop (passed in
+    # above) -- same dict object, so both callers' cooldown checks agree
+    # on what was last commanded per color and never double-fire the
+    # same target.
 
     print(f"Listening (device={args.device}), sending OSC {args.address} "
           f"to {args.host}:{args.port} on each detected beat. "
@@ -544,6 +698,10 @@ def main():
             spectrum = np.fft.rfft(samples)
             mag = np.abs(spectrum)
 
+            # None until flux_history has enough samples (~1s of
+            # startup) -- expected, not a bug; the web UI sends these
+            # through as null for that brief warm-up window.
+            flux = mean = std = threshold = None
             if prev_mag is not None:
                 flux = np.sum(
                     np.maximum(0, mag[band_mask] - prev_mag[band_mask])
@@ -556,9 +714,8 @@ def main():
                 if len(flux_history) >= HISTORY_SIZE:
                     mean = np.mean(flux_history)
                     std = np.std(flux_history)
-                    threshold = mean + args.sensitivity * std
+                    threshold = mean + live_config.sensitivity * std
 
-                    now = time.monotonic()
                     since_last_ms = (now - last_beat_time) * 1000
                     if (flux > threshold and flux > 0
                             and since_last_ms >= args.refractory_ms):
@@ -569,13 +726,28 @@ def main():
 
             prev_mag = mag
 
+            # Classification always runs (not just under --auto) so the
+            # tuning web UI's intensity chart has live data even when
+            # auto-layer switching itself is off. Only the actual QLC+
+            # button press (run_auto_layer_step) stays gated on --auto.
+            band, level_db = classifier.update(samples)
+            if band != last_committed_band:
+                print(f"[intensity] band -> {LAYERS[band]} "
+                      f"(level={level_db:+.1f} dB)")
+                last_committed_band = band
             if args.auto:
-                band, level_db = classifier.update(samples)
-                if band != last_committed_band:
-                    print(f"[intensity] band -> {LAYERS[band]} "
-                          f"(level={level_db:+.1f} dB)")
-                    last_committed_band = band
                 run_auto_layer_step(ws_client, state, band, last_layer_command)
+
+            if args.web_ui and now - last_metrics_push >= 0.1:
+                web_ui.push_metrics_nowait(
+                    metrics_queue, t=now,
+                    flux=float(flux) if flux is not None else None,
+                    mean=float(mean) if mean is not None else None,
+                    std=float(std) if std is not None else None,
+                    threshold=(float(threshold)
+                               if threshold is not None else None),
+                    level_db=float(level_db), band=int(band))
+                last_metrics_push = now
 
     except KeyboardInterrupt:
         print("\nStopping.")

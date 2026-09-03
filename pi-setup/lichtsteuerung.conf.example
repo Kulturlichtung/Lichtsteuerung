@@ -41,6 +41,16 @@ ALSA_DEVICE="hw:2,0"
 # QLC+ Web Access port (must match between both services).
 WEB_PORT="9999"
 
+# Port for beat_osc.py's tuning web UI (live charts, draggable threshold
+# lines for sensitivity + the 3 intensity boundaries). 80 so it's the
+# first thing reachable without typing a port -- needs
+# AmbientCapabilities=CAP_NET_BIND_SERVICE in beat-osc.service, already
+# set (see pi-setup/beat-osc.service), so this does not require running
+# as root. Reachable at http://<Pi-IP-or-Hostname>/ on the same hotspot
+# the tablet already uses for :9999 -- its own page has a button to QLC+
+# Web Access too, so this is effectively the front door.
+UI_PORT="80"
+
 # --- WLAN hotspot (Pi opens its own WLAN, no router/WLAN at the venue
 # needed -- tablet connects directly to this) ---
 

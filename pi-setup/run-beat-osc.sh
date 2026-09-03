@@ -39,4 +39,7 @@ exec "$REPO_DIR/beat-detector/venv/bin/python3" -u beat_osc.py --auto \
     --baseline-seconds "${BASELINE_SECONDS:-120}" \
     --intensity-ema-alpha "${INTENSITY_EMA_ALPHA:-0.15}" \
     --band-hold-ms "${BAND_HOLD_MS:-2000}" \
+    --web-ui \
+    --ui-port "${UI_PORT:-80}" \
+    --config-file "$CONFIG" \
     "${startup_color_args[@]}"

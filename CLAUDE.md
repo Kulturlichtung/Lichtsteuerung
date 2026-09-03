@@ -868,6 +868,151 @@ something else -- only the same-target repeat-fire is suppressed. Not yet re-ver
 this fix (next boot / next watchdog restart should show a single `[auto]` line per transition,
 no more flapping).
 
+**Third bug reported 2026-09-03: Auto `<Farbe>` button activates on boot, but the matching Fade
+layer often doesn't come on.** Not the same bug as the two above (the 2026-08-02 `last_command`
+cooldown fix is already in place and didn't help here) -- this is a startup-specific gap in a
+different part of the design.
+
+Two compounding causes, both source-verified against `webaccess/src/webaccess.cpp` at the
+`QLC+_4.14.4` tag before fixing (same discipline as elsewhere in this file):
+
+1. `run_auto_layer_step` (the thing that actually presses the Fade button) only ever ran *inside*
+   the main audio-capture loop's tick. If that loop hangs before its first iteration -- plausible
+   right at Pi cold-boot while the USB mic/ALSA stack is still settling, and the exact hang
+   documented above in "Beat detection silently hanging mid-session" is still unexplained and
+   still happening -- Auto still goes ON (the WebSocket thread that presses the Auto button is
+   independent of the audio thread), but the Fade press that should follow it never fires, because
+   the one piece of code that would fire it never got a tick.
+2. `--startup-auto-color`'s Auto-button press fired unconditionally in `QLCWebSocket._on_open`,
+   with no knowledge of whether that Auto was already on. A restart of *this script* (e.g. the
+   systemd watchdog killing/restarting a hung process, per the mitigation above) does not restart
+   QLC+ -- QLC+'s own state, including an already-active Auto button, survives across it. Since
+   the Auto buttons are `Action=Toggle`, a second blind press after such a restart could silently
+   flip an already-on Auto back off, which -- combined with #1 -- explains why this reproduced
+   "manchmal/meistens", not deterministically: it depends on whether/when the audio-loop hang hit
+   relative to the Auto press and any subsequent watchdog restart.
+
+**Fix (`beat_osc.py`):**
+- `QLCWebSocket` now queries real widget state on connect (`QLC+API|getWidgetStatus|<wID>`, a
+  request/reply command confirmed in `webaccess.cpp`'s `slotHandleWebSocketRequest` -- distinct
+  from the `<wID>|BUTTON|<value>` broadcast format used elsewhere, but the reply
+  (`QLC+API|getWidgetStatus|<wID>|<status>`) carries the same wID/status pair, so it's fed through
+  the same `WebAccessState.handle_button` callback) for every Auto and layer widget ID at connect
+  time, instead of assuming everything starts off.
+- The startup-color press and the "Auto on, no layer on -> default Fade" enforcement both moved
+  out of the audio loop into a new **independent thread**, `run_invariant_loop`, started alongside
+  the existing WebSocket/sender threads in `main()`. It runs on a plain 2s timer, decoupled from
+  audio capture entirely, so it still catches and fixes the gap even if the capture loop is stuck
+  in the hang described above. It only presses the startup Auto button if, after a grace period
+  (`STARTUP_GRACE_S = 5.0`, room for the connect-time status queries to come back), no color's
+  Auto is confirmed active -- never blindly toggles one that's already on. It shares the same
+  `last_command`/cooldown dict as `run_auto_layer_step` (now passed into `main()` before either
+  thread starts) so both callers agree on what was last commanded per color and can't double-fire
+  the same target within the same 1s window -- same anti-flapping mechanism as the 2026-08-02 fix,
+  just now shared across two independent callers instead of one.
+- This directly implements the "watchdog-style invariant" ask that prompted this fix: whenever a
+  color's Auto is active, *something* in that color is now guaranteed to end up active too
+  (defaulting to Fade), checked independently of whatever the audio thread is doing.
+
+**Not yet verified live on the Pi** -- same status as everything else in this section until
+re-tested against real hardware; `python3 -m py_compile` confirmed only that it's syntactically
+valid. Next real boot (and ideally a forced watchdog restart while Auto is already on, to
+specifically exercise cause #2 above) should show at most one `[invariant]` Auto-color press ever,
+and a `[invariant] ... forcing fade` line shortly after boot whenever the audio loop didn't get to
+it first.
+
+### Tuning web UI: live charts + draggable thresholds (`web_ui.py`, started 2026-09-03)
+
+New ask: view/edit `beat_osc.py`'s beat-detection sensitivity and the 3 auto-layer intensity
+thresholds from a browser, live (charts showing the real signal against the configured value,
+draggable), with edits persisted back into `lichtsteuerung.conf` on the USB stick -- not just a
+one-off change that's lost on the next restart.
+
+**Architecture decisions and why:**
+- **aiohttp, in its own thread with its own asyncio event loop**, started from `main()` only when
+  `--web-ui` is passed (`import web_ui` is lazy, mirroring the existing lazy `import alsaaudio` for
+  `--audio-backend alsaaudio` -- no hard dependency on aiohttp for users who never use this). Same
+  isolation principle already established for `QLCWebSocket`: blocking I/O (HTTP/WS serving, config
+  file writes) never runs on the audio-capture thread, and the audio thread never blocks waiting on
+  this module -- `push_metrics_nowait()` drops a sample rather than risk repeating the exact class
+  of bug that made `QLCWebSocket.send_press()` enqueue-only in the first place (see that class's
+  docstring).
+- **New module (`web_ui.py`), not inlined into `beat_osc.py`.** That file already mixes beat OSC,
+  the QLC+ WebSocket client, and intensity classification; a 4th concern (HTTP/WS server + config
+  persistence + static file serving) plus keeping `aiohttp` importable-only-when-needed made a
+  separate module the cleaner boundary.
+- **`LiveConfig`** (in `web_ui.py`): plain attributes, no lock -- same GIL-atomic-write reasoning
+  already used for `WebAccessState`/`last_command` in `beat_osc.py`. `IntensityClassifier`'s
+  constructor now takes a `live_config` object instead of 4 scalars, and reads it fresh every
+  `update()` call instead of caching values at construction, so edits take effect immediately.
+  `intensity_thresholds_db` is always sorted ascending by `LiveConfig.set_intensity_thresholds_db`
+  -- not just tidy, `IntensityClassifier.update()`'s `sum(1 for t in thresholds if level_db > t)`
+  produces nonsensical band math on out-of-order input, and a chart drag can easily cross two
+  handles momentarily.
+- **Classification decoupled from `--auto`**: `classifier.update(samples)` now runs every tick
+  unconditionally (cheap), so the intensity chart has live data even with auto-layer switching
+  itself off. Only `run_auto_layer_step(...)` (the actual QLC+ button press) stays gated on
+  `--auto`.
+- **Config persistence**: `web_ui.update_conf_file()` is a targeted regex line-rewriter (not a bash
+  parser) that replaces only the `KEY="value"` lines it's told to, byte-preserving everything else
+  (comments, order, unrelated keys). Atomic (temp file in the same directory + `fsync` +
+  `os.replace()`) -- this file lives on an exFAT USB stick this Pi is specifically designed to
+  survive an abrupt power cut on, not a clean shutdown. Writes are debounced 0.75s
+  (`PERSIST_DEBOUNCE_S`) so a drag gesture's many WS messages don't hammer the USB stick; the
+  in-memory `LiveConfig` still updates immediately regardless, so behavior is live even before the
+  debounced write lands.
+- **Beat-detection threshold line is not a stored value.** The existing algorithm computes
+  `threshold = mean + sensitivity * std` fresh every tick from a rolling flux window (unchanged).
+  A drag on that chart's threshold line is therefore inverted client-side into a new `sensitivity`
+  using the most recently broadcast `mean`/`std` (`(draggedY - lastMean) / lastStd`, clamped to
+  [0.1, 10.0]) rather than written as an absolute value -- and the line keeps drifting slightly
+  after release as new `mean`/`std` arrive. This is expected, documented in `app.js` and the
+  README, specifically so nobody "fixes" it into a frozen line later. The number-field fallback for
+  the same control writes `sensitivity` directly -- no inversion needed there, since it edits the
+  real parameter rather than a derived chart position.
+
+**Port 80 + hostname (added after further discussion the same day):** originally planned as a
+*separate* 4th systemd service (a static two-button "landing page" independent of
+`beat-osc.service`, so it would survive an audio-thread hang/restart) -- dropped as unnecessary
+complexity once the user pointed out the tuning UI can just as easily serve its own front door.
+`beat_osc.py --web-ui` now typically binds `UI_PORT` (Pi default `80`, via
+`lichtsteuerung.conf`/`run-beat-osc.sh`) directly; `pi-setup/beat-osc.service` gained
+`AmbientCapabilities=CAP_NET_BIND_SERVICE` + `NoNewPrivileges=true` so the already-non-root service
+user can bind port 80 without becoming root. The tuning UI's own page carries a link/button to QLC+
+Web Access (built client-side from `location.hostname` + the fixed port 9999, so it works whether
+reached by IP or by hostname). Hostname reachability itself (`http://<hostname>.local/`) rides on
+Raspberry Pi OS's default `avahi-daemon` (mDNS) -- already relied on by this README's own Step 1
+SSH instructions (`ssh <user>@<hostname>.local`), but that confirmation was over the home LAN before
+the Pi's own hotspot AP existed; whether mDNS carries over cleanly to the hotspot's `wlan0`
+interface is a different topology and is **not yet confirmed live**. Known, undocumented-until-now
+limitation either way: `.local` resolution is solid on iOS/macOS, historically unreliable on
+Android/Windows without extra software -- the plain IP `http://10.42.0.1/` is kept as the
+documented, guaranteed-working fallback regardless.
+
+- **Chart.js + `chartjs-plugin-annotation` are fetched onto the Pi at setup/update time
+  (`curl`, README Step 3), not committed to the git repo.** Corrected after user feedback on the
+  first draft of this plan, which had them checked in -- unnecessary, since the Pi is on a wired
+  LAN with real internet access whenever its code is updated (at home, before it goes back on stage
+  without internet) -- exactly the same moment `git clone`/`pip install` already need connectivity.
+  The two files land under `/opt/lichtsteuerung/beat-detector/static/vendor/` (gitignored), which
+  survives reboot via the existing overlay protection (Step 7), same as QLC+ itself and the venv.
+  Deliberately no `type: 'time'` Chart.js x-axis / date-adapter vendored -- plain `type: 'linear'`
+  with seconds-since-an-arbitrary-epoch (`time.monotonic()`) x-values avoids needing a 3rd vendored
+  file just for a 30s rolling window.
+
+**Not yet verified live on the Pi or a real tablet** -- same status as everything else in this file
+until physically tested. What *is* checked: `python3 -m py_compile beat_osc.py web_ui.py`, and a
+standalone backend smoke test (synthetic `LiveConfig` + fake metrics + a real `aiohttp` WS client)
+confirming: the config message on connect, a live metrics broadcast, `set_sensitivity` and
+`set_intensity_thresholds` round-tripping through the server (including sorting a deliberately
+out-of-order `[9.0, 1.0, 5.0]` input back to `[1.0, 5.0, 9.0]`), and the debounced write actually
+landing in a scratch copy of `lichtsteuerung.conf` with every unrelated line byte-identical
+afterward and no stray temp file left behind. Not checked here at all: real touch-drag interaction
+with `chartjs-plugin-annotation` on a tablet browser, whether `AmbientCapabilities` actually lets
+the service bind port 80 on a real systemd/Pi (only reasoned from `systemd.exec(5)`'s documented
+behavior), mDNS over the real hotspot, and whether this 4th thread has any interaction with the
+still-unexplained mic-capture hang over a long real session.
+
 ## Known gotchas: Chaser (`Type="Chaser"`) authoring
 
 Two independent issues have hit the "Farbwechsel" Chaser; both are now fixed in this file, but

@@ -104,6 +104,20 @@ Konsole zeigt bei jedem erkannten Beat eine Zeile.
 
 Bei Bedarf `--sensitivity` (niedriger = empfindlicher) und `--refractory-ms` anpassen.
 
+**5. Tuning-Web-UI lokal testen (optional)**
+```
+python beat_osc.py --device <Index> --auto --web-ui --ui-port 8080
+```
+Browser auf `http://127.0.0.1:8080/`. Für die Charts/verschiebbaren Linien müssen `chart.js` +
+`chartjs-plugin-annotation` unter `static/vendor/` liegen — auf dem Windows-Rechner (hat Internet)
+einmalig von Hand nachziehen, falls nicht schon vorhanden:
+```
+mkdir static\vendor
+curl -o static\vendor\chart.umd.min.js https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js
+curl -o static\vendor\chartjs-plugin-annotation.min.js https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js
+```
+Details/Hintergrund: eigener Abschnitt "Tuning-Web-UI" weiter unten.
+
 ## Auto-Layer: Intensitäts-gesteuerte Ebenen-Auswahl
 
 Zusätzlich zur Takterkennung: `beat_osc.py --auto` schaltet pro Farbkombo automatisch zwischen
@@ -143,6 +157,58 @@ landet der Button auf "aus" statt "an", reine Zufallssache je nach Timing. Fix: 
 werden jetzt für 1s "gemerkt" (`last_layer_command`) und nicht erneut gesendet, solange auf
 Bestätigung des exakt gleichen Ziels gewartet wird — reagiert weiterhin sofort, wenn sich das
 gewünschte Ziel ändert oder ein Mensch manuell einen anderen Button drückt.
+
+**Bug gefunden und gefixt 2026-09-03: Auto-Button aktiviert sich beim Booten, Licht geht aber oft
+nicht direkt an.** Anderer Bug als oben — die Ebenen-Umschaltung (`run_auto_layer_step`) lief
+bisher ausschließlich im Audio-Loop-Tick; hängt der (weiterhin ungeklärte, siehe `CLAUDE.md`)
+Mikrofon-Capture-Hang gleich beim Boot, bekommt Auto zwar ein WebSocket-Press (eigener Thread),
+die passende Ebene aber nie einen. Dazu presste `--startup-auto-color` den Auto-Button bisher
+blind bei jedem Verbindungsaufbau — nach einem Watchdog-Neustart *dieses Skripts* (QLC+ selbst
+läuft dabei weiter) konnte das ein bereits aktives Auto per Toggle wieder ausschalten. Fix: neuer,
+vom Audio-Loop unabhängiger Thread (`run_invariant_loop`), der alle 2s prüft — fragt den echten
+Zustand per `QLC+API|getWidgetStatus` ab statt blind zu drücken, und erzwingt Fade als Default,
+sobald eine Farbe Auto-aktiv ist, aber keine Ebene läuft. Genau der "Watchdog-Invariante"-Ansatz,
+der angefragt wurde. Noch nicht live auf dem Pi verifiziert, Details in `CLAUDE.md`.
+
+## Tuning-Web-UI: Live-Charts + Schwellwerte anpassen
+
+`beat_osc.py --web-ui` startet eine kleine, eigene Web-Oberfläche (separater Port neben QLC+ Web
+Access) zum Ansehen/Live-Anpassen der Beat- und Auto-Layer-Schwellwerte, ohne die `.conf`-Datei von
+Hand zu editieren und den Dienst neu zu starten. Läuft im selben Prozess wie `beat_osc.py`
+(`beat-osc.service`), kein eigener Dienst.
+
+**Erreichbar:** `http://<Pi-IP-oder-Hostname>/` (Port `UI_PORT` aus `lichtsteuerung.conf`, auf dem
+Pi standardmäßig `80` — siehe unten zu Hostnamen). Zeigt zwei Live-Diagramme (aktualisieren sich
+~10x/Sekunde):
+- **Beat-Erkennung** — der rohe Flux-Wert plus eine Linie für die aktuelle Schwelle. Die Schwelle
+  ist **kein** fester Wert, sondern wird laufend aus `Mittelwert + Sensitivity × Streuung` des
+  Flux-Fensters berechnet — Ziehen an der Linie rechnet das einmalig in einen neuen
+  `Sensitivity`-Wert um; danach wandert die Linie durch neue Messwerte minimal weiter, das ist
+  normal, kein Bug. Alternativ direkt per Zahlenfeld setzen (schreibt `Sensitivity` direkt, keine
+  Umrechnung nötig).
+- **Auto-Stufen (Intensität)** — der dB-Pegel plus 3 unabhängig verschiebbare Linien für die
+  Fade/Direkt/Alternierend/AltAus-Grenzen. Kreuzen sich zwei Linien beim Ziehen, sortiert der
+  Server sie automatisch wieder aufsteigend (nötig, da die Auto-Layer-Logik aufsteigende Reihenfolge
+  voraussetzt) und alle verbundenen Geräte zeigen danach denselben Stand.
+
+Jede Änderung wirkt **sofort** (live im laufenden Prozess) und wird — mit 0.75s Verzögerung, damit
+ein Zieh-Gestus nicht bei jedem Pixel schreibt — zurück in `lichtsteuerung.conf` auf dem USB-Stick
+geschrieben (atomar, übersteht einen Stromausfall mitten im Schreiben).
+
+Oben auf der Seite führt ein Button direkt zu QLC+ Web Access (Port 9999) — diese Seite ist
+effektiv die Startseite für die tablet-basierte Bedienung.
+
+**Hostname statt IP:** der Pi bekommt seinen Hostnamen (z. B. `lichtsteuerung`) schon in Schritt 1
+gesetzt; dank des mitgelieferten `avahi-daemon` (mDNS) sollte `http://<hostname>.local/` genauso
+funktionieren wie die IP `http://10.42.0.1/` — auf iOS/macOS zuverlässig, auf Android/Windows ohne
+Zusatz-Software historisch unzuverlässig, deshalb bleibt die IP der garantierte Fallback.
+
+**Stand 2026-09-03: noch nicht live auf dem Pi/Tablet getestet** — nur lokal (Backend-Roundtrip:
+Config-Persistenz, WebSocket-Protokoll) sowie `python3 -m py_compile` geprüft. Offen: echtes
+Touch-Dragging auf einem Tablet-Browser (Plugin bisher nur Maus-getestet), Erreichbarkeit über den
+echten Hotspot, mDNS-Auflösung über den Hotspot speziell (bisher nur über das heimische LAN beim
+initialen SSH-Zugang bestätigt, andere Netz-Topologie), und ob der zusätzliche Web-UI-Thread den
+weiterhin ungeklärten Mikrofon-Capture-Hang beeinflusst.
 
 ---
 
@@ -260,14 +326,33 @@ git clone https://github.com/Kulturlichtung/Lichtsteuerung.git /opt/lichtsteueru
 cd /opt/lichtsteuerung/beat-detector
 python3 -m venv --system-site-packages venv
 sudo apt install -y python3-pyaudio python3-numpy libasound2-dev
-./venv/bin/pip install python-osc websocket-client pyalsaaudio
+./venv/bin/pip install python-osc websocket-client pyalsaaudio aiohttp
 ```
 `--system-site-packages` + `apt install python3-pyaudio python3-numpy`: vermeidet, `pyaudio`
 selbst gegen PortAudio-Header zu kompilieren (auf dem Pi über apt deutlich unkomplizierter,
 gleicher Grund wie schon für die Windows-Installation in diesem README). `pyalsaaudio` +
 `libasound2-dev`: der Pi nutzt standardmässig das `alsaaudio`-Backend (`AUDIO_BACKEND` in
 `lichtsteuerung.conf`, siehe unten) statt `pyaudio`/PortAudio — bestätigt 2026-08-02 als Fix für
-einen sonst wiederkehrenden Mikrofon-Capture-Hang (Details: `CLAUDE.md`).
+einen sonst wiederkehrenden Mikrofon-Capture-Hang (Details: `CLAUDE.md`). `aiohttp`: Backend der
+Tuning-Web-UI (`--web-ui`, siehe eigener Abschnitt oben).
+
+**Tuning-Web-UI-Bibliotheken laden (`chart.js` + `chartjs-plugin-annotation`).** Genau hier steht
+der Pi noch per LAN-Kabel zuhause mit Internet — die beiden JS-Dateien werden deshalb jetzt einmalig
+heruntergeladen statt im Git-Repo mitgeführt zu werden (sie werden später auf der Bühne ohne
+Internet nie neu geladen, nur einmal hier abgelegt und bleiben dank Overlay-Schutz erhalten, siehe
+Schritt 7):
+```
+mkdir -p static/vendor
+[ -f static/vendor/chart.umd.min.js ] || \
+  curl -fsSL -o static/vendor/chart.umd.min.js \
+    https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js
+[ -f static/vendor/chartjs-plugin-annotation.min.js ] || \
+  curl -fsSL -o static/vendor/chartjs-plugin-annotation.min.js \
+    https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js
+```
+Idempotent (läuft nur, wenn die Datei fehlt) — bei einem späteren `git pull` auf der Bühne ohne
+Internet einfach denselben Befehl weglassen/ignorieren, die schon vorhandenen Dateien werden nicht
+angefasst.
 
 Mikrofon-Geräteindex ermitteln (für `MIC_DEVICE` — nur relevant, falls doch mal auf
 `AUDIO_BACKEND="pyaudio"` zurückgewechselt wird, s. u.):
@@ -443,12 +528,18 @@ Pi neu starten (echter Kaltstart, nicht nur Service-Neustart) und beobachten:
 - WLAN-Liste auf Tablet/Laptop zeigt die konfigurierte `HOTSPOT_SSID`, verbinden mit
   `HOTSPOT_PASSWORD` klappt.
 - Nach Verbinden mit dem Hotspot: Browser auf `http://<Pi-IP>:9999` → Virtual Console sichtbar
-  (Pi-IP z. B. `192.168.4.1`, NetworkManager-Standard-Gateway im Shared-Modus — genauer Wert
-  noch nicht auf echter Hardware bestätigt, siehe unten).
+  (Pi-IP **`10.42.0.1`**, bestätigt 2026-08-03 auf echter Hardware via `ip addr show wlan0` —
+  NetworkManager's tatsächlicher Shared-Modus-Standard ist `10.42.0.0/24`, **nicht** `192.168.4.1`
+  wie ursprünglich angenommen, siehe unten).
 - Konsole/Log von `beat-osc.service` zeigt `[ws] connected to ...` und (falls `AUTO_COLOR`
   gesetzt) `[state] Auto <farbe>: ON` kurz nach dem Start.
-- Musik/Rhythmus vorspielen → Lautstärke ändern → passender Ebenen-Button sollte sich in der
-  Web-UI als aktiv zeigen.
+- Musik/Rhythmus vorspielen → Lautstärke ändern → passender Ebenen-Button sollte sich in QLC+ Web
+  Access (Virtual Console) als aktiv zeigen.
+- Browser auf `http://10.42.0.1/` (und, falls mDNS über den Hotspot funktioniert,
+  `http://<hostname>.local/`) → Tuning-Web-UI lädt, zeigt bewegte Charts, der "QLC+ öffnen"-Button
+  führt zu Web Access. Sensitivity/Schwellwert ändern (Feld oder Ziehen im Diagramm), Dienst
+  neu starten (`sudo systemctl restart beat-osc.service`) → Änderung ist noch da (aus
+  `lichtsteuerung.conf` persistiert).
 
 ### Projekt/Konfiguration später ändern
 
@@ -556,10 +647,21 @@ systemctl show beat-osc.service | grep -iE "type|watchdog"
   intern in `beat_osc.py` der Default (fürs lokale Windows-Testen, da `pyalsaaudio`
   Linux/ALSA-only ist). Noch nicht über eine ganze Session/Abend auf dem Pi mit dem neuen
   Standard-Backend bestätigt — Watchdog bleibt trotzdem aktiv als Sicherheitsnetz.
-- **WLAN-Hotspot (`hotspot.service`/`run-hotspot.sh`) ist neu und noch nicht auf echter
-  Pi-Hardware getestet** — `nmcli`-Befehle gegen NetworkManager-Doku geprüft, aber nicht selbst
-  durchgespielt (gleiche "erst live bestätigen"-Regel wie überall sonst in diesem Projekt). Beim
-  ersten echten Durchlauf insbesondere prüfen: ob Pi 5 + eingebautes WLAN-Modul den `ap`-Modus
-  tatsächlich unterstützt, ob `ipv4.method shared` die erwartete Pi-IP (üblich `192.168.4.1`)
-  vergibt, und ob `Before=qlcplus.service` reicht oder das Tablet manchmal vor fertigem
-  Hotspot-Start verbinden will.
+- **WLAN-Hotspot (`hotspot.service`/`run-hotspot.sh`) auf echter Pi-Hardware bestätigt
+  2026-08-03** — Pi 5 + eingebautes WLAN-Modul unterstützt `ap`-Modus, Hotspot kommt hoch,
+  Tablet/Handy kann sich verbinden. `ipv4.method shared` vergibt tatsächlich **`10.42.0.1/24`**
+  (`ip addr show wlan0` bestätigt), **nicht** `192.168.4.1` wie ursprünglich vermutet — das war
+  der klassische hostapd/dnsmasq-Default, NetworkManager's eigener Shared-Modus-Default ist
+  anders. `Before=qlcplus.service` reichte im Test — kein Race zwischen Hotspot-Start und
+  Tablet-Verbindung beobachtet. Einziger Stolperstein: ein Android-Handy zeigt nach dem Verbinden
+  ein Ausrufezeichen-Icon ("kein Internet") am WLAN-Symbol — das ist korrekt/erwartet (Hotspot hat
+  bewusst kein Internet) und kein Fehler, einfach "Verbindung behalten" bestätigen.
+- **Tuning-Web-UI (`--web-ui`, Port 80/`UI_PORT`, Stand 2026-09-03) noch nicht live auf Pi/Tablet
+  getestet** — nur Backend (Config-Persistenz-Roundtrip, WebSocket-Protokoll) lokal geprüft, siehe
+  eigener Abschnitt oben. Offen: echtes Touch-Dragging der Schwellenlinien auf einem Tablet-Browser
+  (`chartjs-plugin-annotation` bisher nur Maus-getestet); ob `AmbientCapabilities=CAP_NET_BIND_SERVICE`
+  in `beat-osc.service` den Dienst wie erwartet Port 80 binden lässt, ohne root zu werden; mDNS
+  (`<hostname>.local`) speziell über das Hotspot-Interface (bisher nur übers heimische LAN beim
+  initialen SSH-Zugang bestätigt, andere Topologie) — auf Android/Windows-Tablets ist `.local`
+  ohnehin historisch unzuverlässig, `http://10.42.0.1/` bleibt der Fallback; und ob der
+  zusätzliche aiohttp-Thread den weiterhin ungeklärten Mikrofon-Capture-Hang beeinflusst.

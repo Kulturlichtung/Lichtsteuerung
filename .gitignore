@@ -1,3 +1,8 @@
 .claude/
 .idea/
 *.iml
+
+# chart.js + chartjs-plugin-annotation, fetched onto the Pi at setup/
+# update time (README "Projekt-Code auf den Pi bringen"), not committed
+# -- see CLAUDE.md's "Tuning web UI" section for why.
+beat-detector/static/vendor/

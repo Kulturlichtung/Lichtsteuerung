@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lichtsteuerung -- Tuning</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>Beat-Detector / Auto-Layer -- Live-Tuning</h1>
+  <div style="display:flex; align-items:center; gap:0.75rem;">
+    <span id="status" class="disconnected">getrennt</span>
+    <a id="qlc-link" class="qlc-link" href="#" target="_blank" rel="noopener">QLC+ öffnen</a>
+  </div>
+</header>
+
+<main>
+  <section class="chart-block">
+    <h2>Beat-Erkennung</h2>
+    <div class="chart-wrap"><canvas id="beatChart"></canvas></div>
+    <div class="controls" id="beat-controls">
+      <div class="control">
+        <label for="sensitivity">Sensitivity</label>
+        <input type="number" id="sensitivity" step="0.1" min="0.1" max="10">
+      </div>
+    </div>
+    <p class="hint">
+      Die Schwellenlinie ist kein fester Wert, sondern wird laufend aus
+      Mittelwert/Streuung des Flux-Fensters neu berechnet
+      (<code>Schwelle = Mittelwert + Sensitivity &times; Streuung</code>).
+      Beim Ziehen der Linie wird daraus einmalig ein neuer Sensitivity-Wert
+      errechnet -- die Linie wandert danach durch neue Messwerte minimal
+      weiter, das ist normal, kein Fehler.
+    </p>
+  </section>
+
+  <section class="chart-block">
+    <h2>Auto-Stufen (Intensität)</h2>
+    <div class="chart-wrap"><canvas id="intensityChart"></canvas></div>
+    <div class="controls" id="intensity-controls">
+      <div class="control">
+        <label for="d1">Fade &rarr; Direkt (D1, dB)</label>
+        <input type="number" id="d1" step="0.1" min="-20" max="40">
+      </div>
+      <div class="control">
+        <label for="d2">Direkt &rarr; Alternierend (D2, dB)</label>
+        <input type="number" id="d2" step="0.1" min="-20" max="40">
+      </div>
+      <div class="control">
+        <label for="d3">Alternierend &rarr; AltAus (D3, dB)</label>
+        <input type="number" id="d3" step="0.1" min="-20" max="40">
+      </div>
+    </div>
+    <p class="hint">
+      Die 3 Linien lassen sich unabhängig ziehen oder per Zahlenfeld setzen.
+      Werden zwei Linien beim Ziehen vertauscht, sortiert der Server sie
+      automatisch wieder aufsteigend -- alle verbundenen Geräte zeigen
+      danach denselben, sortierten Stand.
+    </p>
+  </section>
+</main>
+
+<script src="/static/vendor/chart.umd.min.js"></script>
+<script src="/static/vendor/chartjs-plugin-annotation.min.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
