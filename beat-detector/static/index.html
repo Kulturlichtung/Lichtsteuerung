@@ -59,12 +59,13 @@
       Die 3 Linien lassen sich unabhängig ziehen oder per Zahlenfeld setzen.
       Werden zwei Linien beim Ziehen vertauscht, sortiert der Server sie
       automatisch wieder aufsteigend -- alle verbundenen Geräte zeigen
-      danach denselben, sortierten Stand. Die grüne Linie ist bewusst
-      träge (gleitender Durchschnitt über die Hold-Zeit) -- sie
-      überschreitet eine Schwelle erst dann sichtbar, wenn der Pegel auch
-      lang genug darüber geblieben wäre, um die Stufe wirklich zu
-      wechseln. Ein kurzer Ausschlag reißt die Linie nur kurz an, ohne sie
-      über die Schwelle zu heben.
+      danach denselben, sortierten Stand. Die grüne Linie zeigt normal den
+      echten, verrauschten Pegel. Sobald aber ein Stufenwechsel intern
+      tatsächlich "vorgemerkt" ist, bewegt sie sich stattdessen für die
+      Dauer der Hold-Zeit gleichmäßig auf die nächste Schwelle zu -- kommt
+      sie dort an, wechselt in genau diesem Moment auch wirklich die
+      Stufe. Wird der Wechsel zwischendurch verworfen (Pegel fällt wieder),
+      springt die Linie zurück auf den echten Pegel.
     </p>
   </section>
 </main>

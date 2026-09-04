@@ -379,6 +379,24 @@ class IntensityClassifier:
         return self.committed_band, level_db
 
 
+# A fixed dB offset above/below the outermost thresholds, used only to
+# give band 0 ("below D1") and band 3 ("above D3") a concrete reference
+# point for the display line below -- see band_reference_levels().
+BAND_REF_MARGIN_DB = 2.0
+
+
+def band_reference_levels(thresholds_db):
+    """One reference dB value per intensity band (0-3): the midpoint of
+    that band's own range, or BAND_REF_MARGIN_DB beyond the outermost
+    threshold for the two open-ended bands. Used to turn a possibly
+    fractional "how far between band A and band B" progress value (see
+    the display-level comment in main()) into an actual chart y-position.
+    """
+    t1, t2, t3 = thresholds_db
+    return [t1 - BAND_REF_MARGIN_DB, (t1 + t2) / 2,
+            (t2 + t3) / 2, t3 + BAND_REF_MARGIN_DB]
+
+
 LAYER_PRESS_COOLDOWN_S = 1.0
 
 
@@ -685,23 +703,6 @@ def main():
 
     classifier = IntensityClassifier(live_config)
 
-    # Chart-display-only lag filter (replaces an earlier hold-progress-bar
-    # UI -- see CLAUDE.md's "Tuning web UI" section). Rather than plotting
-    # the raw, instantly-reactive level_db and a separate countdown widget,
-    # the tuning UI now plots this heavily low-pass-filtered version, time
-    # constant band_hold_s (same exponential-alpha formula as
-    # LiveConfig.baseline_alpha) -- so the line itself only visually
-    # crosses a threshold after roughly the dwell time the real classifier
-    # needs to commit. Purely a display value: never fed back into
-    # classifier.update() or any real decision, computed from the same raw
-    # level_db. Not a bit-exact replica of the actual commit condition
-    # (which requires the *same* candidate band throughout a continuous
-    # window, not just "close to threshold") -- a close enough visual
-    # approximation for tuning, not a second source of truth.
-    display_level_alpha = 1 - np.exp(
-        -chunk_dt / max(live_config.band_hold_s, 1e-6))
-    display_level = None
-
     def send_beat():
         send_beat_press(osc, args.address)
 
@@ -804,9 +805,36 @@ def main():
             # auto-layer switching itself is off. Only the actual QLC+
             # button press (run_auto_layer_step) stays gated on --auto.
             band, level_db = classifier.update(samples)
-            display_level = (level_db if display_level is None else
-                              display_level + display_level_alpha *
-                              (level_db - display_level))
+            # Chart-display value (replaces an earlier hold-progress-bar
+            # UI, then an earlier still low-pass filter on raw level_db --
+            # see CLAUDE.md's "Tuning web UI" section for why both of
+            # those were superseded). A generic low-pass filter on the raw
+            # signal turned out to *not* reliably track the real decision:
+            # the actual commit requires the exact same candidate band
+            # persisting continuously for band_hold_s, but raw level_db is
+            # noisy enough that the candidate band itself flickers between
+            # values without ever holding one long enough to commit, even
+            # while its filtered average trends steadily upward -- exactly
+            # the mismatch reported live (chart implied Stufe 2/3, real
+            # system stayed on Stufe 1). Fixed by deriving the display
+            # value directly from the same ground-truth state that drives
+            # the real decision (classifier.candidate_band/.candidate_since),
+            # instead of independently re-deriving something similar from
+            # raw level_db: while no candidate is pending, show the real,
+            # noisy level_db (nothing is building, no ramp to show); the
+            # instant a candidate starts, override with a deterministic
+            # ramp between the current and candidate band's reference
+            # level, in exact lockstep with the real hold timer -- so it
+            # can only ever finish rising at the same moment the real
+            # system commits, by construction, not approximation.
+            candidate_band = classifier.candidate_band
+            if candidate_band is None:
+                display_level = level_db
+            else:
+                refs = band_reference_levels(live_config.intensity_thresholds_db)
+                frac = min(1.0, (now - classifier.candidate_since)
+                           / max(live_config.band_hold_s, 1e-6))
+                display_level = refs[band] + frac * (refs[candidate_band] - refs[band])
             if band != last_committed_band:
                 print(f"[intensity] band -> {LAYERS[band]} "
                       f"(level={level_db:+.1f} dB)")

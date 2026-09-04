@@ -1203,6 +1203,30 @@ the goal, just no longer *implying* a switch that hasn't (and mostly won't) happ
 Not yet re-verified live -- same status as everything else in this section until tested on the Pi
 with a real gradual intensity ramp (not just isolated knocks).
 
+**Confirmed live 2026-09-04, same day: the accepted approximation above turned out to actually
+matter -- chart showed Stufe 2/3, real system stayed on Stufe 1 (Fade) the whole time.** Exactly
+the gap the previous entry called out as a known risk, not a hypothetical: the low-pass filter
+tracked a *smoothed average* of the noisy raw `level_db`, which can trend steadily upward even while
+the raw `candidate_band` itself never holds the *same* value continuously long enough to commit
+(the real requirement) -- it kept flickering between bands as individual loud transients came and
+went, resetting the real hold timer every time, invisibly to a filter that only sees the average.
+
+**Fixed by deriving the display value from the real ground-truth state instead of re-approximating
+it from raw level_db.** `beat_osc.py`'s per-tick display value is now: while
+`classifier.candidate_band` is `None` (nothing pending), just show the real, noisy `level_db` --
+there's nothing to ramp toward. The instant a candidate starts, switch to a deterministic ramp from
+the current band's reference level to the candidate band's reference level
+(`band_reference_levels()` -- each band's own midpoint dB, or `BAND_REF_MARGIN_DB` beyond the
+outermost threshold for the two open-ended bands), timed by the *actual*
+`candidate_since`/`band_hold_s` the real commit logic uses. This can't diverge from the real system
+by construction -- it's built from the exact same state variables, not a separate signal-processing
+approximation of them. If the candidate resets (real level drops back out), the display
+immediately snaps back to showing raw `level_db` too, same as the real system abandoning that
+candidate.
+
+Not yet re-verified live -- same status as the rest of this section until re-tested against a real
+gradual intensity ramp on the Pi.
+
 ## Known gotchas: Chaser (`Type="Chaser"`) authoring
 
 Two independent issues have hit the "Farbwechsel" Chaser; both are now fixed in this file, but

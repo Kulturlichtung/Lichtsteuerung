@@ -261,12 +261,14 @@
       }
     }
 
-    // m.level_db is already the server-side lag-filtered display value
-    // (time constant = band_hold_s), not the raw instantaneous level --
-    // see beat_osc.py's `display_level`. That's what makes this line
-    // itself sluggish enough to only visibly cross a threshold once a
-    // real commit would roughly be due, replacing an earlier separate
-    // hold-progress-bar widget.
+    // m.level_db is beat_osc.py's `display_level`: the real raw level
+    // while nothing is pending, or a deterministic ramp -- built directly
+    // from the same candidate-band/hold-timer state that drives the real
+    // decision -- while a band change is actually being held for. See
+    // that file's comment for why an earlier generic low-pass filter on
+    // raw level_db wasn't good enough (could visually trend toward a
+    // threshold while the real, noisier candidate never held long enough
+    // to commit).
     levelData.push({ x: m.t, y: m.level_db });
     trimOld(levelData, m.t);
 
