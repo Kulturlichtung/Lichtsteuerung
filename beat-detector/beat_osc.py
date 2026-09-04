@@ -362,9 +362,11 @@ class IntensityClassifier:
 LAYER_PRESS_COOLDOWN_S = 1.0
 
 
-def run_auto_layer_step(ws_client, state, band, last_command):
+def run_auto_layer_step(ws_client, state, band, last_command, last_command_lock):
     """last_command: {color: (desired_layer, monotonic_time_sent)}, mutated
-    in place across calls.
+    in place across calls. last_command_lock guards every check-then-act
+    on it -- see the note on run_invariant_loop below for why a plain
+    dict isn't enough even though individual get/set calls are GIL-atomic.
 
     Called every audio-loop tick (~23ms). QLC+'s Web Access feedback
     round-trip (state.active_layer() only updates once the button-press
@@ -389,13 +391,14 @@ def run_auto_layer_step(ws_client, state, band, last_command):
     current_layer = state.active_layer(active_color)
     if current_layer == desired_layer:
         return
-    prev_layer, prev_time = last_command.get(active_color, (None, 0.0))
-    now = time.monotonic()
-    if prev_layer == desired_layer and (now - prev_time) < LAYER_PRESS_COOLDOWN_S:
-        return
+    with last_command_lock:
+        prev_layer, prev_time = last_command.get(active_color, (None, 0.0))
+        now = time.monotonic()
+        if prev_layer == desired_layer and (now - prev_time) < LAYER_PRESS_COOLDOWN_S:
+            return
+        last_command[active_color] = (desired_layer, now)
     widget_id = LAYER_BUTTON_ID[active_color][desired_layer]
     ws_client.send_press(widget_id)
-    last_command[active_color] = (desired_layer, now)
     print(f"[auto] {active_color}: {current_layer} -> {desired_layer} "
           f"(widget {widget_id})")
 
@@ -403,7 +406,8 @@ def run_auto_layer_step(ws_client, state, band, last_command):
 STARTUP_GRACE_S = 5.0
 
 
-def run_invariant_loop(ws_client, state, startup_auto_color, last_command):
+def run_invariant_loop(ws_client, state, startup_auto_color, last_command,
+                        last_command_lock):
     """Independent safety-net thread, decoupled from the audio-capture
     loop on purpose -- so it keeps enforcing even if that loop is stuck
     in the still-unexplained mic-read hang documented in CLAUDE.md
@@ -428,6 +432,18 @@ def run_invariant_loop(ws_client, state, startup_auto_color, last_command):
        touches an already-active layer -- that's run_auto_layer_step's
        job, driven by live intensity. This only fills the gap where
        Auto is on and *nothing* underneath it is running.
+
+    last_command_lock is the *same* lock run_auto_layer_step uses:
+    both threads do a check-then-act ("no fade commanded yet for this
+    color" -> send press -> record it) against the shared last_command
+    dict, and a plain dict's per-call atomicity doesn't cover that whole
+    sequence. Without the lock, this loop's ~2s tick and the audio
+    thread's ~23ms tick can both observe "not yet commanded" for the same
+    color/layer at the same time and both fire a press -- two press+
+    release toggles back to back on an Action=Toggle button cancel out
+    to OFF net, which looks exactly like "the layer never came on" even
+    though a press genuinely went out. Confirmed as a real gap 2026-09-04
+    after a live Pi boot left Auto active with no layer lit.
     """
     start = time.monotonic()
     startup_done = False
@@ -450,14 +466,15 @@ def run_invariant_loop(ws_client, state, startup_auto_color, last_command):
         if state.active_layer(active_color) is not None:
             continue
 
-        prev_layer, prev_time = last_command.get(active_color, (None, 0.0))
-        now = time.monotonic()
-        if (prev_layer == "fade"
-                and (now - prev_time) < LAYER_PRESS_COOLDOWN_S):
-            continue
+        with last_command_lock:
+            prev_layer, prev_time = last_command.get(active_color, (None, 0.0))
+            now = time.monotonic()
+            if (prev_layer == "fade"
+                    and (now - prev_time) < LAYER_PRESS_COOLDOWN_S):
+                continue
+            last_command[active_color] = ("fade", now)
         widget_id = LAYER_BUTTON_ID[active_color]["fade"]
         ws_client.send_press(widget_id)
-        last_command[active_color] = ("fade", now)
         print(f"[invariant] Auto {active_color} active with no layer, "
               f"forcing fade (widget {widget_id})")
 
@@ -596,6 +613,7 @@ def main():
     state = WebAccessState()
     ws_client = None
     last_layer_command = {}
+    last_layer_command_lock = threading.Lock()
     if args.auto:
         ws_url = f"ws://{args.host}:{args.web_port}/qlcplusWS"
         ws_client = QLCWebSocket(ws_url, on_button=state.handle_button)
@@ -607,7 +625,7 @@ def main():
         invariant_thread = threading.Thread(
             target=run_invariant_loop,
             args=(ws_client, state, args.startup_auto_color,
-                  last_layer_command),
+                  last_layer_command, last_layer_command_lock),
             daemon=True)
         invariant_thread.start()
 
@@ -752,7 +770,8 @@ def main():
                       f"(level={level_db:+.1f} dB)")
                 last_committed_band = band
             if args.auto:
-                run_auto_layer_step(ws_client, state, band, last_layer_command)
+                run_auto_layer_step(ws_client, state, band, last_layer_command,
+                                     last_layer_command_lock)
 
             if args.web_ui and now - last_metrics_push >= 0.1:
                 web_ui.push_metrics_nowait(

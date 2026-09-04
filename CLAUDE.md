@@ -921,6 +921,35 @@ specifically exercise cause #2 above) should show at most one `[invariant]` Auto
 and a `[invariant] ... forcing fade` line shortly after boot whenever the audio loop didn't get to
 it first.
 
+**Fourth bug found 2026-09-04, first real Pi boot with the above fix deployed: Auto `<Farbe>`
+confirmed active, but still no layer active** -- i.e. the exact symptom the Third-bug fix above was
+meant to close, reproducing on its very first live test. The "shares the same `last_command`/
+cooldown dict ... so both callers agree ... can't double-fire" claim in that fix's writeup
+(directly above) turns out to be wrong: sharing the *dict* isn't the same as sharing a *critical
+section*. `run_auto_layer_step` (audio-loop thread, ticks every ~23ms) and `run_invariant_loop`
+(its own thread, ticks every 2s) each do a check-then-act against `last_command` --
+"read whether fade was already commanded recently" then, if not, "send a press and record it" --
+and nothing made that whole sequence atomic across the two threads. A plain dict's individual
+`get`/`[]=` calls are GIL-atomic, but the *pair* of them isn't: both threads can read "not yet
+commanded" before either has written its own command, both then send a press for the same widget
+(115, Fade for Blau-Rosa) within milliseconds of each other. Since the layer buttons are
+`Action=Toggle` and `send_press` is a full press+release (one toggle) per call, two presses that
+close together toggle the button on and immediately back off -- net state: inactive, with zero
+error or indication anything was even attempted. This is the same *class* of bug as the
+2026-08-02 "layer button stayed inactive" fix (Toggle-button double-fire), just reopened by adding
+a second caller of `last_command` without re-checking the single-writer assumption that fix relied
+on.
+
+**Fix:** a `threading.Lock` (`last_layer_command_lock`, created once in `main()`, passed to both
+`run_auto_layer_step` and `run_invariant_loop`) now guards the entire read-decide-write sequence in
+both functions, so only one of the two callers can ever be mid-decision for a given color at a
+time -- the loser of the race now correctly sees the winner's just-written command and backs off,
+instead of both committing to send. `send_press` itself stays *outside* the locked section in both
+functions (only the shared-dict bookkeeping is locked) so a slow/blocked WebSocket send still can't
+stall the other thread's unrelated decisions. **Not yet re-verified live** -- same status as the
+rest of this section; next boot should show at most one `[auto]`/`[invariant]` press line per
+actual transition, never two for the same target in quick succession.
+
 ### Tuning web UI: live charts + draggable thresholds (`web_ui.py`, started 2026-09-03)
 
 New ask: view/edit `beat_osc.py`'s beat-detection sensitivity and the 3 auto-layer intensity
