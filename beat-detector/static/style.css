@@ -137,7 +137,9 @@ p.hint {
   font-size: 0.8rem;
   color: var(--muted);
 }
-.hold-indicator[hidden] { display: none; }
+/* visibility, not display:none -- keeps the box's height reserved so
+ * toggling it doesn't reflow/shift the controls below it. */
+.hold-indicator.idle { visibility: hidden; }
 .hold-bar {
   flex: 1;
   height: 6px;

@@ -381,6 +381,17 @@ class IntensityClassifier:
 
 LAYER_PRESS_COOLDOWN_S = 1.0
 
+# A single percussive hit bumps both spectral flux (-> beat) and RMS (->
+# intensity candidate) at once, so classifier.candidate_band goes non-null
+# for a few chunks on essentially every beat, almost always decaying back
+# out well before band_hold_s -- these will basically never commit. Not
+# suppressing them at the source (still tracked internally, so real dwell
+# timing for an actual commit is unaffected) meant the web UI's hold
+# indicator flashed "Wechsel zu ..." at 0% progress on every single beat,
+# indistinguishable from a real building trend. Only surface a candidate
+# to the UI once it's outlived a plain transient.
+CANDIDATE_DISPLAY_MIN_S = 0.3
+
 
 def run_auto_layer_step(ws_client, state, band, last_command, last_command_lock):
     """last_command: {color: (desired_layer, monotonic_time_sent)}, mutated
@@ -809,10 +820,14 @@ def main():
                 candidate_band = classifier.candidate_band
                 candidate_progress = None
                 if candidate_band is not None:
-                    candidate_progress = min(
-                        1.0,
-                        (now - classifier.candidate_since)
-                        / max(live_config.band_hold_s, 1e-6))
+                    candidate_elapsed = now - classifier.candidate_since
+                    if candidate_elapsed >= CANDIDATE_DISPLAY_MIN_S:
+                        candidate_progress = min(
+                            1.0,
+                            candidate_elapsed
+                            / max(live_config.band_hold_s, 1e-6))
+                    else:
+                        candidate_band = None
                 web_ui.push_metrics_nowait(
                     metrics_queue, t=now,
                     flux=float(flux) if flux is not None else None,

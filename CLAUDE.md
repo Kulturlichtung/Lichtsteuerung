@@ -1160,6 +1160,22 @@ static/app.js` pass, but the actual chart behavior (marker dots landing on real 
 filling and clearing correctly during a real knock-then-silence test) needs a real browser session
 to confirm, same as the rest of this section.
 
+**Confirmed live on the Pi 2026-09-04: beat markers work, hold indicator didn't -- two follow-up UX
+bugs, fixed same session.** Real knock test: beat chart's red dots landed correctly on real beats
+(first fix confirmed working). Intensity chart: Fade correctly stayed active throughout (quiet
+tapping, as expected), but the hold indicator flashed "Wechsel zu ..." on every single beat and
+never showed real progress, plus caused a visible layout content-shift each time it appeared.
+
+Root causes: (1) a single knock bumps both spectral flux (beat) and RMS (intensity) at once, so
+`classifier.candidate_band` goes non-null for a few chunks on nearly every beat -- these almost
+never live long enough to commit, but were shown anyway at ~0% progress, indistinguishable from a
+real trend. Fixed with `CANDIDATE_DISPLAY_MIN_S = 0.3` in `beat_osc.py`: a candidate is only sent
+to the UI once it has outlived a plain transient (still tracked from the true onset internally, so
+actual commit timing is unaffected -- this only filters what's *displayed*). (2) the indicator
+toggled the `hidden` attribute (`display: none`), which drops/restores its box in the layout on
+every toggle. Fixed by keeping the element always in flow and toggling `visibility: hidden` via an
+`.idle` CSS class instead (`style.css`/`app.js`) -- same space reserved whether shown or not.
+
 ## Known gotchas: Chaser (`Type="Chaser"`) authoring
 
 Two independent issues have hit the "Farbwechsel" Chaser; both are now fixed in this file, but

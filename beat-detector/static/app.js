@@ -270,12 +270,12 @@
     trimOld(levelData, m.t);
 
     if (m.candidate_band !== null && m.candidate_band !== undefined) {
-      holdEl.hidden = false;
+      holdEl.classList.remove("idle");
       holdLabelEl.textContent =
         `Wechsel zu "${LAYER_NAMES[m.candidate_band]}" ...`;
       holdFillEl.style.width = `${Math.round((m.candidate_progress || 0) * 100)}%`;
     } else {
-      holdEl.hidden = true;
+      holdEl.classList.add("idle");
     }
 
     pinXAxis(beatChart, m.t);
