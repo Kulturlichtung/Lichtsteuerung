@@ -222,6 +222,13 @@ class QLCWebSocket:
     *this* script -- QLC+ itself keeps running and keeps its state) could
     silently flip an already-active Auto back off. See run_invariant_loop
     for what actually presses buttons based on this state now.
+
+    Confirmed live 2026-09-04: QLC+ Web Access does not broadcast a
+    state-change back to the socket that itself caused the change --
+    only to *other* connected clients (a tablet). This script's own
+    presses therefore never self-confirm via broadcast; sender_loop()
+    applies the resulting state locally instead of waiting on one (see
+    its comment for why that's safe for every press this script sends).
     """
 
     def __init__(self, url, on_button):
@@ -296,6 +303,19 @@ class QLCWebSocket:
                 if kind == "press":
                     self._ws.send(f"{widget_id}|1")
                     self._ws.send(f"{widget_id}|0")
+                    # QLC+ Web Access does NOT echo a state-change broadcast
+                    # back to the socket that caused it (confirmed live
+                    # 2026-09-04: a tablet tap on a different client reliably
+                    # produced a [state] log line, this script's own presses
+                    # never did, in a 10+ minute window) -- only reported by
+                    # our own docstrings as an assumption before this. Every
+                    # send_press() call in this script is only ever used to
+                    # turn something ON (Auto button, layer button), so we
+                    # can safely apply that as our own local state the
+                    # instant the send succeeds, instead of waiting forever
+                    # for a broadcast that will never arrive for a
+                    # self-triggered change.
+                    self.on_button(widget_id, 255)
                 else:
                     self._ws.send(f"QLC+API|getWidgetStatus|{widget_id}")
             except Exception as e:

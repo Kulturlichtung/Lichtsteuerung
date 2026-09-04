@@ -946,9 +946,40 @@ both functions, so only one of the two callers can ever be mid-decision for a gi
 time -- the loser of the race now correctly sees the winner's just-written command and backs off,
 instead of both committing to send. `send_press` itself stays *outside* the locked section in both
 functions (only the shared-dict bookkeeping is locked) so a slow/blocked WebSocket send still can't
-stall the other thread's unrelated decisions. **Not yet re-verified live** -- same status as the
-rest of this section; next boot should show at most one `[auto]`/`[invariant]` press line per
-actual transition, never two for the same target in quick succession.
+stall the other thread's unrelated decisions.
+
+**Deployed and re-tested live 2026-09-04 -- lock fix alone did not fix it; real root cause found
+and fixed same day.** `journalctl` after the lock fix showed the invariant thread's Auto press for
+Blau-Rosa went out fine (visually confirmed active on the tablet), but **zero `[state]` log lines
+ever followed it** in a 10+ minute window -- meaning `WebAccessState` never learned Auto was on
+from this script's own point of view, so the "force Fade" branch's `active_color is None` guard
+never cleared and it just idled forever (the startup Auto press is deliberately one-shot, so
+nothing ever retried either). Decisive test: tailed the live log and had a human tap a layer
+button **on the tablet** (a different WebSocket client) while watching -- that produced an
+immediate `[state] Layer blau-rosa/fade: ON` line. So broadcast reception itself works fine; the
+gap is narrower than originally assumed in the Third-bug fix above: **QLC+ Web Access does not
+broadcast a widget's state-change back to the same socket that caused it** (via a `<wID>|1`/`<wID>|0`
+press message), only to *other* connected clients. Every external tap, and every side effect of a
+`SoloFrame` auto-stopping a sibling, is genuinely a different socket/cause from this script's
+viewpoint and broadcasts normally -- it's specifically this script's own presses of its own
+buttons that never echo back to itself. This directly contradicts the "every connected client...
+whenever `VCButton::stateChanged` fires, from *any* cause... this script's own press" claim in the
+original Auto-layer design section above (source-read from `webaccess.cpp`, never live-tested
+until now) -- same "source reading isn't proof of this exact build's runtime behavior" lesson as
+the `TempoType` and Scene-`write()` gotchas elsewhere in this file, now hitting the Web Access path
+too.
+
+**Actual fix:** `QLCWebSocket.sender_loop()` now calls `self.on_button(widget_id, 255)` itself,
+locally, immediately after a `press` send succeeds -- instead of waiting on a broadcast that will
+never arrive for that widget from that socket. Safe because every `send_press()` call in this
+script is only ever used to turn something ON (the startup Auto button, or a layer button); there
+is no code path that presses to turn something off (that always happens as a `SoloFrame`
+side-effect on a *different*, genuinely-external-from-this-socket widget, which does broadcast
+correctly per the tablet test above). The optimistic update is placed in `sender_loop`, gated on
+the actual `ws.send()` calls having succeeded (not at the calling/decision site), so a dropped-because-
+disconnected press correctly does *not* mark local state as changed. **Not yet re-verified live**
+-- next boot should show a `[state] Auto <color>: ON` line immediately following the invariant
+thread's own press, and the "force fade" branch actually firing and sticking afterward.
 
 ### Tuning web UI: live charts + draggable thresholds (`web_ui.py`, started 2026-09-03)
 
