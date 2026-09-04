@@ -1,9 +1,13 @@
 /* Tuning UI client. Talks to web_ui.py's /ws endpoint: receives a
  * "config" message on connect and after every edit (server is the
  * single source of truth -- see web_ui.py's handle_ws), and "metrics"
- * messages at ~10Hz with live flux/mean/std/threshold/level_db data.
- * Sends set_sensitivity / set_intensity_thresholds / reset_to_default
- * edits back.
+ * messages with live flux/mean/std/threshold/level_db data, normally
+ * throttled to ~10Hz but also pushed immediately on every detected beat
+ * (beat_osc.py's `beat_fired`) -- otherwise the ~10Hz sampling misses
+ * most real beat spikes, since a single knock's flux spike lasts only
+ * one ~23ms audio chunk. `beat: true` on such a message is what drives
+ * the red marker dots below. Sends set_sensitivity /
+ * set_intensity_thresholds / reset_to_default edits back.
  *
  * Beat chart: beat_osc.py's own math is threshold = mean + sensitivity
  * * std, i.e. sensitivity only makes sense in units of "std deviations
@@ -46,6 +50,11 @@
   const d3Input = document.getElementById("d3");
   const resetBtn = document.getElementById("reset-defaults-btn");
 
+  const holdEl = document.getElementById("intensity-hold");
+  const holdLabelEl = document.getElementById("intensity-hold-label");
+  const holdFillEl = document.getElementById("intensity-hold-fill");
+  const LAYER_NAMES = ["Fade", "Direkt", "Alternierend", "Alternierend mit Aus"];
+
   let ws = null;
   let draggingBeat = false;
   let draggingIntensity = { d1: false, d2: false, d3: false };
@@ -54,6 +63,7 @@
   let applyingRemoteConfig = false;
 
   const beatData = [];
+  const beatMarkers = [];
   const levelData = [];
 
   function trimOld(arr, latestT) {
@@ -79,6 +89,17 @@
         borderWidth: 1.5,
         pointRadius: 0,
         tension: 0,
+      }, {
+        // Marks every chunk that actually fired a beat (beat_osc.py's
+        // own `flux > threshold` check, unthrottled) -- distinct from
+        // the line above, which is only sampled ~10x/s and can miss a
+        // spike that lasts a single ~23ms chunk. See the file header.
+        label: "Beat",
+        data: beatMarkers,
+        showLine: false,
+        pointRadius: 4,
+        pointBackgroundColor: "#ff5577",
+        pointBorderColor: "#ff5577",
       }],
     },
     options: {
@@ -239,10 +260,23 @@
       const z = (m.flux - m.mean) / m.std;
       beatData.push({ x: m.t, y: z });
       trimOld(beatData, m.t);
+      if (m.beat) {
+        beatMarkers.push({ x: m.t, y: z });
+        trimOld(beatMarkers, m.t);
+      }
     }
 
     levelData.push({ x: m.t, y: m.level_db });
     trimOld(levelData, m.t);
+
+    if (m.candidate_band !== null && m.candidate_band !== undefined) {
+      holdEl.hidden = false;
+      holdLabelEl.textContent =
+        `Wechsel zu "${LAYER_NAMES[m.candidate_band]}" ...`;
+      holdFillEl.style.width = `${Math.round((m.candidate_progress || 0) * 100)}%`;
+    } else {
+      holdEl.hidden = true;
+    }
 
     pinXAxis(beatChart, m.t);
     pinXAxis(intensityChart, m.t);

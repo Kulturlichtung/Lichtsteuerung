@@ -32,12 +32,19 @@
       Linie ist die eingestellte Sensitivity selbst -- konstant, sie
       bewegt sich nur, wenn du sie ziehst oder das Zahlenfeld änderst. Ein
       Beat wird ausgelöst, sobald die blaue Linie die orange überschreitet.
+      Ein roter Punkt markiert jeden tatsächlich erkannten Beat -- auch
+      wenn die Linie selbst (nur ~10x/Sekunde gezeichnet) die kurze Spitze
+      dazwischen nicht zeigt.
     </p>
   </section>
 
   <section class="chart-block">
     <h2>Auto-Stufen (Intensität)</h2>
     <div class="chart-wrap"><canvas id="intensityChart"></canvas></div>
+    <div id="intensity-hold" class="hold-indicator" hidden>
+      <span id="intensity-hold-label"></span>
+      <div class="hold-bar"><div id="intensity-hold-fill" class="hold-bar-fill"></div></div>
+    </div>
     <div class="controls" id="intensity-controls">
       <div class="control">
         <label for="d1">Fade &rarr; Direkt (D1, dB)</label>
@@ -56,7 +63,11 @@
       Die 3 Linien lassen sich unabhängig ziehen oder per Zahlenfeld setzen.
       Werden zwei Linien beim Ziehen vertauscht, sortiert der Server sie
       automatisch wieder aufsteigend -- alle verbundenen Geräte zeigen
-      danach denselben, sortierten Stand.
+      danach denselben, sortierten Stand. Ein Balken erscheint, sobald der
+      Pegel eine Schwelle überschritten hat, aber noch nicht lang genug
+      (Hold-Zeit) darüber geblieben ist, um die Stufe wirklich zu wechseln
+      -- ein kurzer Ausschlag reicht bewusst nicht, sonst würde ständig
+      zwischen Stufen geflackert.
     </p>
   </section>
 </main>

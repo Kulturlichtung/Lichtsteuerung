@@ -1122,6 +1122,44 @@ Not yet re-verified live after this fix (same "not yet verified on real hardware
 rest of this section) -- next real Pi/tablet session should show a flat, still Sensitivity line
 that only moves on an actual edit, and a clean left edge with no visible fraying.
 
+**Both charts found to misrepresent actual QLC+ behavior (2026-09-04), two unrelated causes:**
+user tapped a slow ~80bpm rhythm on the table and watched both charts. Fade (the active layer at
+the time) changed color on every tap, as expected -- but the beat chart's z-score line barely ever
+crossed the Sensitivity line, implying beats should have fired far less often than they visibly
+did; separately, the intensity chart showed several spikes above D3 with no actual layer switch
+ever happening.
+
+1. **Beat chart: a sampling/aliasing artifact, not a detection bug.** The metrics push to the web
+   UI is throttled to ~10Hz (`now - last_metrics_push >= 0.1` in `beat_osc.py`), but flux is
+   computed and compared against `threshold` every audio chunk (~23ms, ~43Hz) -- the actual
+   `send_beat()` trigger. A single knock's flux spike lasts about one chunk, so any given spike had
+   only a ~25% chance of landing on a chunk that also happened to be a throttled push -- the chart
+   was silently dropping ~3 of every 4 real above-threshold moments, while the untouched per-chunk
+   comparison driving `send_beat()` saw every one of them. Fixed: the push is now also fired
+   unconditionally the instant `beat_fired` is true (bypassing the 100ms gate, and resetting its
+   timer so the next throttled push doesn't double up), tagged `beat: true`. This both closes the
+   sampling gap for the *cause* of the mismatch and (per the user's follow-up ask) gives the client
+   something to draw a marker from -- `static/app.js` now carries a second, line-less Chart.js
+   dataset (`beatMarkers`, red dots) populated only from samples with `beat: true`.
+2. **Intensity chart: not a bug, but an undisplayed dwell-time requirement.** `IntensityClassifier`
+   (see "Auto-layer" above) already requires a candidate band to hold above its threshold for
+   `band_hold_ms` (default 2000ms) before it *commits* -- a knock's fast-EMA spike crosses D3 for a
+   fraction of a second and decays back down long before that, so no layer switch ever happens, by
+   design (the same flap-suppression the "Auto-Stufen" hysteresis was built for). The chart just
+   never showed this half of the mechanism -- crossing a threshold line looked like it should be
+   sufficient on its own. Fixed: `classifier.candidate_band`/`candidate_since` (already tracked
+   internally) are now read back in the main loop each push and sent as `candidate_band` +
+   `candidate_progress` (0..1, elapsed/`band_hold_s`); `index.html` gained a small hidden-until-
+   needed progress bar under the intensity chart ("Wechsel zu ... in Vorbereitung"), shown and
+   filled by `app.js` whenever a candidate band is pending, hidden again once it commits or decays
+   back off. No change to the underlying classification logic -- purely surfaces state that was
+   already being computed.
+
+Not yet re-verified live -- `python3 -m py_compile beat_osc.py web_ui.py` and `node --check
+static/app.js` pass, but the actual chart behavior (marker dots landing on real beats, the hold bar
+filling and clearing correctly during a real knock-then-silence test) needs a real browser session
+to confirm, same as the rest of this section.
+
 ## Known gotchas: Chaser (`Type="Chaser"`) authoring
 
 Two independent issues have hit the "Farbwechsel" Chaser; both are now fixed in this file, but

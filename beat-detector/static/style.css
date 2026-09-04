@@ -129,6 +129,30 @@ p.hint {
   color: var(--muted);
 }
 
+.hold-indicator {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.6rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.hold-indicator[hidden] { display: none; }
+.hold-bar {
+  flex: 1;
+  height: 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.hold-bar-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  border-radius: 999px;
+}
+
 #controls-disabled-overlay[hidden] { display: none; }
 .controls[data-disabled="true"] input {
   opacity: 0.5;

@@ -756,6 +756,7 @@ def main():
             # startup) -- expected, not a bug; the web UI sends these
             # through as null for that brief warm-up window.
             flux = mean = std = threshold = None
+            beat_fired = False
             if prev_mag is not None:
                 flux = np.sum(
                     np.maximum(0, mag[band_mask] - prev_mag[band_mask])
@@ -774,6 +775,7 @@ def main():
                     if (flux > threshold and flux > 0
                             and since_last_ms >= args.refractory_ms):
                         last_beat_time = now
+                        beat_fired = True
                         send_beat()
                         print(f"beat  flux={flux:.1f}  "
                               f"threshold={threshold:.1f}")
@@ -793,7 +795,24 @@ def main():
                 run_auto_layer_step(ws_client, state, band, last_layer_command,
                                      last_layer_command_lock)
 
-            if args.web_ui and now - last_metrics_push >= 0.1:
+            # Pushed unthrottled (bypassing the 100ms gate below) on every
+            # detected beat, in addition to the regular throttled push --
+            # the chart's ~10Hz sampling otherwise misses most beat spikes
+            # entirely, since a single knock's flux spike lasts only one
+            # ~23ms chunk (see CLAUDE.md's "Tuning web UI" section for the
+            # user-reported symptom this fixes: chart implied beats almost
+            # never crossed the threshold, while QLC+ visibly advanced on
+            # every real beat). Forcing a sample at the exact chunk that
+            # crossed threshold guarantees the chart shows it, and
+            # `beat=True` lets the client mark that point distinctly.
+            if args.web_ui and (beat_fired or now - last_metrics_push >= 0.1):
+                candidate_band = classifier.candidate_band
+                candidate_progress = None
+                if candidate_band is not None:
+                    candidate_progress = min(
+                        1.0,
+                        (now - classifier.candidate_since)
+                        / max(live_config.band_hold_s, 1e-6))
                 web_ui.push_metrics_nowait(
                     metrics_queue, t=now,
                     flux=float(flux) if flux is not None else None,
@@ -801,7 +820,11 @@ def main():
                     std=float(std) if std is not None else None,
                     threshold=(float(threshold)
                                if threshold is not None else None),
-                    level_db=float(level_db), band=int(band))
+                    level_db=float(level_db), band=int(band),
+                    beat=beat_fired,
+                    candidate_band=(int(candidate_band)
+                                     if candidate_band is not None else None),
+                    candidate_progress=candidate_progress)
                 last_metrics_push = now
 
     except KeyboardInterrupt:
