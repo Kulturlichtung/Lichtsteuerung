@@ -1176,6 +1176,33 @@ toggled the `hidden` attribute (`display: none`), which drops/restores its box i
 every toggle. Fixed by keeping the element always in flow and toggling `visibility: hidden` via an
 `.idle` CSS class instead (`style.css`/`app.js`) -- same space reserved whether shown or not.
 
+**Hold indicator replaced entirely with a sluggish chart line (2026-09-04), same day, user's own
+suggestion.** Rather than keep tuning the progress-bar widget, asked whether the intensity chart's
+line itself could just be made sluggish enough that it only visibly crosses a threshold once the
+real hold time has actually elapsed -- removing the need for a separate indicator (and its
+flicker/content-shift issues) altogether.
+
+Implemented as a display-only low-pass filter: `beat_osc.py` computes `display_level` each audio
+chunk as an exponential lag toward the raw `level_db`, time constant `band_hold_s`
+(`display_level_alpha = 1 - exp(-chunk_dt / band_hold_s)`, same formula shape as
+`LiveConfig.baseline_alpha`) -- and pushes *that* to the web UI as `level_db` instead of the raw
+value. `classifier.update()`'s actual commit logic (the discrete "same candidate band for
+band_hold_s straight" check) is completely untouched -- this filter only feeds the chart, never
+classification or `run_auto_layer_step`. The hold-progress-bar widget (`#intensity-hold` in
+`index.html`, its CSS, and the `candidate_band`/`candidate_progress` metrics fields from the two
+fixes just above) is removed entirely, superseded by this.
+
+**Known, accepted approximation, not a bug:** a simple exponential lag is not a bit-exact replica
+of the real hold-timer. The actual commit requires the *same* candidate band continuously for the
+full duration -- a momentary excursion to a different band (e.g. briefly two bands over on a very
+loud transient) resets the real timer, but would only nudge this lag filter's trajectory, not reset
+it outright. For the kind of gradual intensity buildup this whole feature is meant to visualize
+(not adversarial edge cases), the two track closely enough to be useful -- exact reproduction wasn't
+the goal, just no longer *implying* a switch that hasn't (and mostly won't) happen.
+
+Not yet re-verified live -- same status as everything else in this section until tested on the Pi
+with a real gradual intensity ramp (not just isolated knocks).
+
 ## Known gotchas: Chaser (`Type="Chaser"`) authoring
 
 Two independent issues have hit the "Farbwechsel" Chaser; both are now fixed in this file, but

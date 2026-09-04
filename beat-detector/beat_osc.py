@@ -381,17 +381,6 @@ class IntensityClassifier:
 
 LAYER_PRESS_COOLDOWN_S = 1.0
 
-# A single percussive hit bumps both spectral flux (-> beat) and RMS (->
-# intensity candidate) at once, so classifier.candidate_band goes non-null
-# for a few chunks on essentially every beat, almost always decaying back
-# out well before band_hold_s -- these will basically never commit. Not
-# suppressing them at the source (still tracked internally, so real dwell
-# timing for an actual commit is unaffected) meant the web UI's hold
-# indicator flashed "Wechsel zu ..." at 0% progress on every single beat,
-# indistinguishable from a real building trend. Only surface a candidate
-# to the UI once it's outlived a plain transient.
-CANDIDATE_DISPLAY_MIN_S = 0.3
-
 
 def run_auto_layer_step(ws_client, state, band, last_command, last_command_lock):
     """last_command: {color: (desired_layer, monotonic_time_sent)}, mutated
@@ -696,6 +685,23 @@ def main():
 
     classifier = IntensityClassifier(live_config)
 
+    # Chart-display-only lag filter (replaces an earlier hold-progress-bar
+    # UI -- see CLAUDE.md's "Tuning web UI" section). Rather than plotting
+    # the raw, instantly-reactive level_db and a separate countdown widget,
+    # the tuning UI now plots this heavily low-pass-filtered version, time
+    # constant band_hold_s (same exponential-alpha formula as
+    # LiveConfig.baseline_alpha) -- so the line itself only visually
+    # crosses a threshold after roughly the dwell time the real classifier
+    # needs to commit. Purely a display value: never fed back into
+    # classifier.update() or any real decision, computed from the same raw
+    # level_db. Not a bit-exact replica of the actual commit condition
+    # (which requires the *same* candidate band throughout a continuous
+    # window, not just "close to threshold") -- a close enough visual
+    # approximation for tuning, not a second source of truth.
+    display_level_alpha = 1 - np.exp(
+        -chunk_dt / max(live_config.band_hold_s, 1e-6))
+    display_level = None
+
     def send_beat():
         send_beat_press(osc, args.address)
 
@@ -798,6 +804,9 @@ def main():
             # auto-layer switching itself is off. Only the actual QLC+
             # button press (run_auto_layer_step) stays gated on --auto.
             band, level_db = classifier.update(samples)
+            display_level = (level_db if display_level is None else
+                              display_level + display_level_alpha *
+                              (level_db - display_level))
             if band != last_committed_band:
                 print(f"[intensity] band -> {LAYERS[band]} "
                       f"(level={level_db:+.1f} dB)")
@@ -817,17 +826,6 @@ def main():
             # crossed threshold guarantees the chart shows it, and
             # `beat=True` lets the client mark that point distinctly.
             if args.web_ui and (beat_fired or now - last_metrics_push >= 0.1):
-                candidate_band = classifier.candidate_band
-                candidate_progress = None
-                if candidate_band is not None:
-                    candidate_elapsed = now - classifier.candidate_since
-                    if candidate_elapsed >= CANDIDATE_DISPLAY_MIN_S:
-                        candidate_progress = min(
-                            1.0,
-                            candidate_elapsed
-                            / max(live_config.band_hold_s, 1e-6))
-                    else:
-                        candidate_band = None
                 web_ui.push_metrics_nowait(
                     metrics_queue, t=now,
                     flux=float(flux) if flux is not None else None,
@@ -835,11 +833,8 @@ def main():
                     std=float(std) if std is not None else None,
                     threshold=(float(threshold)
                                if threshold is not None else None),
-                    level_db=float(level_db), band=int(band),
-                    beat=beat_fired,
-                    candidate_band=(int(candidate_band)
-                                     if candidate_band is not None else None),
-                    candidate_progress=candidate_progress)
+                    level_db=float(display_level), band=int(band),
+                    beat=beat_fired)
                 last_metrics_push = now
 
     except KeyboardInterrupt:

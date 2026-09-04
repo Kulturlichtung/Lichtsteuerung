@@ -50,11 +50,6 @@
   const d3Input = document.getElementById("d3");
   const resetBtn = document.getElementById("reset-defaults-btn");
 
-  const holdEl = document.getElementById("intensity-hold");
-  const holdLabelEl = document.getElementById("intensity-hold-label");
-  const holdFillEl = document.getElementById("intensity-hold-fill");
-  const LAYER_NAMES = ["Fade", "Direkt", "Alternierend", "Alternierend mit Aus"];
-
   let ws = null;
   let draggingBeat = false;
   let draggingIntensity = { d1: false, d2: false, d3: false };
@@ -266,17 +261,14 @@
       }
     }
 
+    // m.level_db is already the server-side lag-filtered display value
+    // (time constant = band_hold_s), not the raw instantaneous level --
+    // see beat_osc.py's `display_level`. That's what makes this line
+    // itself sluggish enough to only visibly cross a threshold once a
+    // real commit would roughly be due, replacing an earlier separate
+    // hold-progress-bar widget.
     levelData.push({ x: m.t, y: m.level_db });
     trimOld(levelData, m.t);
-
-    if (m.candidate_band !== null && m.candidate_band !== undefined) {
-      holdEl.classList.remove("idle");
-      holdLabelEl.textContent =
-        `Wechsel zu "${LAYER_NAMES[m.candidate_band]}" ...`;
-      holdFillEl.style.width = `${Math.round((m.candidate_progress || 0) * 100)}%`;
-    } else {
-      holdEl.classList.add("idle");
-    }
 
     pinXAxis(beatChart, m.t);
     pinXAxis(intensityChart, m.t);
