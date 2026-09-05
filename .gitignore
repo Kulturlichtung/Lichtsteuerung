@@ -1,6 +1,8 @@
 .claude/
 .idea/
 *.iml
+__pycache__/
+*.pyc
 
 # chart.js + chartjs-plugin-annotation, fetched onto the Pi at setup/
 # update time (README "Projekt-Code auf den Pi bringen"), not committed
