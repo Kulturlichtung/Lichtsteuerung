@@ -161,7 +161,7 @@
    <RunOrder>Loop</RunOrder>
    <SpeedModes FadeIn="PerStep" FadeOut="PerStep" Duration="PerStep"/>
    <Step Number="0" FadeIn="0" Hold="30000" FadeOut="0">2</Step>
-   <Step Number="1" FadeIn="0" Hold="30000" FadeOut="0">5</Step>
+   <Step Number="1" FadeIn="0" Hold="30000" FadeOut="0">6</Step>
   </Function>
   <Function ID="15" Type="Chaser" Name="S2L Gruen-Gelb">
    <Speed FadeIn="0" FadeOut="0" Duration="0"/>
@@ -255,15 +255,15 @@
   <Function ID="26" Type="Scene" Name="Rot-Weiss Checker A">
    <Speed FadeIn="0" FadeOut="0" Duration="0"/>
    <FixtureVal ID="0">0,255,1,255,2,0,3,0,4,0</FixtureVal>
-   <FixtureVal ID="1">0,255,1,255,2,255,3,255,4,0</FixtureVal>
+   <FixtureVal ID="1">0,255,1,0,2,0,3,0,4,255</FixtureVal>
    <FixtureVal ID="2">0,255,1,255,2,0,3,0,4,0</FixtureVal>
-   <FixtureVal ID="3">0,255,1,255,2,255,3,255,4,0</FixtureVal>
+   <FixtureVal ID="3">0,255,1,0,2,0,3,0,4,255</FixtureVal>
   </Function>
   <Function ID="27" Type="Scene" Name="Rot-Weiss Checker B">
    <Speed FadeIn="0" FadeOut="0" Duration="0"/>
-   <FixtureVal ID="0">0,255,1,255,2,255,3,255,4,0</FixtureVal>
+   <FixtureVal ID="0">0,255,1,0,2,0,3,0,4,255</FixtureVal>
    <FixtureVal ID="1">0,255,1,255,2,0,3,0,4,0</FixtureVal>
-   <FixtureVal ID="2">0,255,1,255,2,255,3,255,4,0</FixtureVal>
+   <FixtureVal ID="2">0,255,1,0,2,0,3,0,4,255</FixtureVal>
    <FixtureVal ID="3">0,255,1,255,2,0,3,0,4,0</FixtureVal>
   </Function>
   <Function ID="28" Type="Chaser" Name="S2L Rot-Weiss Fade">
@@ -272,7 +272,7 @@
    <RunOrder>Loop</RunOrder>
    <SpeedModes FadeIn="PerStep" FadeOut="PerStep" Duration="PerStep"/>
    <Step Number="0" FadeIn="2000" Hold="28000" FadeOut="0">2</Step>
-   <Step Number="1" FadeIn="2000" Hold="28000" FadeOut="0">5</Step>
+   <Step Number="1" FadeIn="2000" Hold="28000" FadeOut="0">6</Step>
   </Function>
   <Function ID="29" Type="Chaser" Name="S2L Rot-Weiss Checker">
    <Speed FadeIn="0" FadeOut="0" Duration="0"/>
@@ -489,9 +489,9 @@
   <Function ID="61" Type="Scene" Name="Rot-Weiss AusChecker B">
    <Speed FadeIn="0" FadeOut="0" Duration="0"/>
    <FixtureVal ID="0">0,0,1,0,2,0,3,0,4,0</FixtureVal>
-   <FixtureVal ID="1">0,255,1,255,2,255,3,255,4,0</FixtureVal>
+   <FixtureVal ID="1">0,255,1,0,2,0,3,0,4,255</FixtureVal>
    <FixtureVal ID="2">0,0,1,0,2,0,3,0,4,0</FixtureVal>
-   <FixtureVal ID="3">0,255,1,255,2,255,3,255,4,0</FixtureVal>
+   <FixtureVal ID="3">0,255,1,0,2,0,3,0,4,255</FixtureVal>
   </Function>
   <Function ID="62" Type="Scene" Name="Gruen-Gelb AusChecker A">
    <Speed FadeIn="0" FadeOut="0" Duration="0"/>
@@ -576,7 +576,7 @@
     <Intensity Adjust="False">100</Intensity>
    </Button>
    <Button Caption="STROBO" ID="59" Icon="">
-    <WindowState Visible="True" X="445" Y="285" Width="166" Height="83"/>
+    <WindowState Visible="True" X="445" Y="285" Width="290" Height="85"/>
     <Appearance>
      <FrameStyle>None</FrameStyle>
      <ForegroundColor>4294967295</ForegroundColor>
@@ -1052,8 +1052,8 @@
      <Input Universe="0" Channel="15568"/>
     </Button>
    </SoloFrame>
-   <Slider Caption="Strobo Speed" ID="61" WidgetStyle="Knob" InvertedAppearance="false">
-    <WindowState Visible="True" X="620" Y="275" Width="115" Height="100"/>
+   <Slider Caption="Strobo Speed" ID="61" WidgetStyle="Slider" InvertedAppearance="false">
+    <WindowState Visible="True" X="755" Y="15" Width="130" Height="355"/>
     <Appearance>
      <FrameStyle>Sunken</FrameStyle>
      <ForegroundColor>Default</ForegroundColor>
